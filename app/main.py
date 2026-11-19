@@ -3,10 +3,7 @@ start through uvicorn on $PORT (port 8000 by default), Alembic migrations (relea
 DATABASE_URL as a database reference and SENDGRID_API_KEY as a required secret."""
 import os
 
-from pathlib import Path
-
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
 from sqlalchemy import create_engine, text
 
 from app.api.custom.onboarding import router as onboarding_router
@@ -30,15 +27,3 @@ def orders():
     with engine.connect() as conn:
         rows = conn.execute(text("select id, total from orders order by id")).all()
     return [{"id": r.id, "total": float(r.total)} for r in rows]
-
-
-_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
-
-
-@app.get("/app/onboarding", response_class=HTMLResponse, include_in_schema=False)
-def onboarding_page():
-    """Serve the onboarding page for signed-in users."""
-    template_path = _TEMPLATE_DIR / "onboarding.html"
-    if not template_path.is_file():
-        return HTMLResponse(content="<h1>Onboarding page not found</h1>", status_code=404)
-    return HTMLResponse(content=template_path.read_text())

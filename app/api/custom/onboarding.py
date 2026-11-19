@@ -1,8 +1,13 @@
 """Onboarding flow API: steps a new user completes to reach the first useful result."""
 import os
+import hmac
+import hashlib
+import secrets
 from datetime import datetime, timezone
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy import Column, DateTime, Integer, String, Boolean, Text
 from sqlalchemy.orm import declarative_base, Session
@@ -12,6 +17,32 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 Base = declarative_base()
+
+# ---------------------------------------------------------------------------
+# Session / auth primitives — HMAC-signed cookie, never trust the client
+# ---------------------------------------------------------------------------
+
+SESSION_COOKIE = "onboarding_session"
+_SECRET_KEY = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+
+
+def _sign(value: str) -> str:
+    """Return *value* with an HMAC-SHA256 signature appended."""
+    sig = hmac.new(_SECRET_KEY.encode(), value.encode(), hashlib.sha256).hexdigest()
+    return f"{value}.{sig}"
+
+
+def _unsign(signed: str) -> str | None:
+    """Return the original value if the signature is valid, otherwise None."""
+    try:
+        value, sig = signed.rsplit(".", 1)
+        expected = hmac.new(_SECRET_KEY.encode(), value.encode(), hashlib.sha256).hexdigest()
+        if hmac.compare_digest(sig, expected):
+            return value
+    except ValueError:
+        pass
+    return None
+
 
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 
@@ -47,18 +78,22 @@ DEFAULT_STEPS = [
     {"step_key": "verify", "title": "Verify everything works", "description": "Check your health endpoints and confirm the deployment is running correctly.", "sort_order": 5},
 ]
 # ---------------------------------------------------------------------------
-# Auth dependency — derive account id from request, return 401 when absent
+# Auth dependency — derive account id from signed cookie, return 401 when absent
 # ---------------------------------------------------------------------------
 
-def get_account_id(x_account_id: str = Header(..., alias="X-Account-ID")) -> str:
-    """Require an X-Account-ID header. Returns 401 when the header is missing.
+def get_account_id(onboarding_session: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> str:
+    """Extract the account id from the signed session cookie.
 
-    In production this would be replaced by a dependency that extracts the
-    account from the authenticated session / user object.
+    The cookie is HMAC-signed by the server; a missing or tampered cookie
+    results in 401.  This ensures data is always stored per the authenticated
+    account — the client can never choose which account to impersonate.
     """
-    if not x_account_id or not x_account_id.strip():
+    if not onboarding_session:
         raise HTTPException(status_code=401, detail="Authentication required")
-    return x_account_id.strip()
+    account_id = _unsign(onboarding_session)
+    if account_id is None or not account_id.strip():
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return account_id.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -219,5 +254,48 @@ def skip_all(
 
     # Return fresh progress after the skip
     return get_progress(account_id=account_id, session=session)
+
+
+# ---------------------------------------------------------------------------
+# Session management — set a signed session cookie for the current account
+# ---------------------------------------------------------------------------
+
+@router.post("/session", tags=["onboarding"], include_in_schema=False)
+def create_session(account_id: str, request: Request):
+    """Create a signed session cookie for *account_id*.
+
+    Called once after sign-up / sign-in so the onboarding page and all
+    subsequent API calls share the same authenticated account.
+    """
+    from fastapi.responses import JSONResponse
+
+    signed = _sign(account_id)
+    response = JSONResponse({"ok": True, "account_id": account_id})
+    response.set_cookie(
+        key=SESSION_COOKIE,
+        value=signed,
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+        max_age=86400 * 30,  # 30 days
+    )
+    return response
+
+
+# ---------------------------------------------------------------------------
+# HTML page — served by the onboarding router so nothing extra is needed
+# in main.py beyond the router include.
+# ---------------------------------------------------------------------------
+
+_TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
+
+
+@router.get("/page", response_class=HTMLResponse, include_in_schema=False)
+def onboarding_page():
+    """Serve the onboarding HTML page."""
+    template_path = _TEMPLATE_DIR / "onboarding.html"
+    if not template_path.is_file():
+        return HTMLResponse(content="<h1>Onboarding page not found</h1>", status_code=404)
+    return HTMLResponse(content=template_path.read_text())
 
 

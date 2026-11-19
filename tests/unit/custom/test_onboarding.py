@@ -42,6 +42,20 @@ from app.main import app
 client = TestClient(app)
 
 
+# ---------------------------------------------------------------------------
+# Helpers — build a signed cookie the same way the server does
+# ---------------------------------------------------------------------------
+
+def _signed_cookie(account_id: str) -> str:
+    """Return the HMAC-signed cookie value for *account_id*."""
+    return onboarding._sign(account_id)
+
+
+def _cookies_for(account_id: str) -> dict:
+    """Return a dict suitable for client.get(..., cookies=...) or client.post(...)."""
+    return {"onboarding_session": _signed_cookie(account_id)}
+
+
 @pytest.fixture(autouse=True)
 def cleanup():
     """Truncate the onboarding_steps table before each test."""
@@ -57,7 +71,7 @@ def cleanup():
 
 def test_get_progress_creates_default_steps_for_new_account():
     """First call for an account creates default steps and returns them."""
-    resp = client.get("/api/onboarding/progress", headers={"X-Account-ID": "acc-1"})
+    resp = client.get("/api/onboarding/progress", cookies=_cookies_for("acc-1"))
     assert resp.status_code == 200
 
     data = resp.json()
@@ -73,27 +87,21 @@ def test_get_progress_creates_default_steps_for_new_account():
         assert step["skipped"] is False
 
 
-def test_get_progress_returns_401_without_header():
-    """Missing X-Account-ID returns 401."""
+def test_get_progress_returns_401_without_cookie():
+    """Missing session cookie returns 401."""
     resp = client.get("/api/onboarding/progress")
     assert resp.status_code == 401
 
 
-def test_get_progress_returns_401_with_empty_header():
-    """Empty X-Account-ID returns 401."""
-    resp = client.get("/api/onboarding/progress", headers={"X-Account-ID": ""})
-    assert resp.status_code == 401
-
-
-def test_get_progress_returns_401_with_whitespace_header():
-    """Whitespace-only X-Account-ID returns 401."""
-    resp = client.get("/api/onboarding/progress", headers={"X-Account-ID": "   "})
+def test_get_progress_returns_401_with_tampered_cookie():
+    """A tampered (unsigned) cookie returns 401."""
+    resp = client.get("/api/onboarding/progress", cookies={"onboarding_session": "fake.invalidsig"})
     assert resp.status_code == 401
 
 
 def test_two_accounts_get_separate_progress():
     """Two different accounts get independent onboarding steps."""
-    resp_a = client.get("/api/onboarding/progress", headers={"X-Account-ID": "acc-a"})
+    resp_a = client.get("/api/onboarding/progress", cookies=_cookies_for("acc-a"))
     assert resp_a.status_code == 200
     data_a = resp_a.json()
     assert data_a["account_id"] == "acc-a"
@@ -101,17 +109,17 @@ def test_two_accounts_get_separate_progress():
     step_a = data_a["steps"][0]
     resp_complete = client.post(
         f"/api/onboarding/complete-step/{step_a['id']}",
-        headers={"X-Account-ID": "acc-a"},
+        cookies=_cookies_for("acc-a"),
     )
     assert resp_complete.status_code == 200
 
-    resp_b = client.get("/api/onboarding/progress", headers={"X-Account-ID": "acc-b"})
+    resp_b = client.get("/api/onboarding/progress", cookies=_cookies_for("acc-b"))
     assert resp_b.status_code == 200
     data_b = resp_b.json()
     assert data_b["account_id"] == "acc-b"
     assert data_b["completed_steps"] == 0
 
-    resp_a2 = client.get("/api/onboarding/progress", headers={"X-Account-ID": "acc-a"})
+    resp_a2 = client.get("/api/onboarding/progress", cookies=_cookies_for("acc-a"))
     data_a2 = resp_a2.json()
     assert data_a2["completed_steps"] == 1
 
@@ -122,13 +130,13 @@ def test_two_accounts_get_separate_progress():
 
 def test_complete_step():
     """Completing a step marks it as completed."""
-    resp = client.get("/api/onboarding/progress", headers={"X-Account-ID": "acc-c"})
+    resp = client.get("/api/onboarding/progress", cookies=_cookies_for("acc-c"))
     steps = resp.json()["steps"]
     step_id = steps[0]["id"]
 
     resp2 = client.post(
         f"/api/onboarding/complete-step/{step_id}",
-        headers={"X-Account-ID": "acc-c"},
+        cookies=_cookies_for("acc-c"),
     )
     assert resp2.status_code == 200
     data = resp2.json()
@@ -139,12 +147,12 @@ def test_complete_step():
 
 def test_complete_step_not_found_wrong_account():
     """Cannot complete a step that belongs to a different account."""
-    resp = client.get("/api/onboarding/progress", headers={"X-Account-ID": "acc-d"})
+    resp = client.get("/api/onboarding/progress", cookies=_cookies_for("acc-d"))
     step_id = resp.json()["steps"][0]["id"]
 
     resp2 = client.post(
         f"/api/onboarding/complete-step/{step_id}",
-        headers={"X-Account-ID": "acc-e"},
+        cookies=_cookies_for("acc-e"),
     )
     assert resp2.status_code == 404
 
@@ -153,7 +161,7 @@ def test_complete_step_not_found_invalid_id():
     """Non-existent step id returns 404."""
     resp = client.post(
         "/api/onboarding/complete-step/99999",
-        headers={"X-Account-ID": "acc-f"},
+        cookies=_cookies_for("acc-f"),
     )
     assert resp.status_code == 404
 
@@ -164,8 +172,8 @@ def test_complete_step_not_found_invalid_id():
 
 def test_skip_all():
     """Skip-all marks all uncompleted steps as skipped."""
-    client.get("/api/onboarding/progress", headers={"X-Account-ID": "acc-g"})
-    resp = client.post("/api/onboarding/skip-all", headers={"X-Account-ID": "acc-g"})
+    client.get("/api/onboarding/progress", cookies=_cookies_for("acc-g"))
+    resp = client.post("/api/onboarding/skip-all", cookies=_cookies_for("acc-g"))
     assert resp.status_code == 200
     data = resp.json()
     assert data["account_id"] == "acc-g"
@@ -179,18 +187,41 @@ def test_skip_all():
 
 def test_skip_all_preserves_completed_steps():
     """Skip-all only affects steps that are not yet completed."""
-    resp = client.get("/api/onboarding/progress", headers={"X-Account-ID": "acc-h"})
+    resp = client.get("/api/onboarding/progress", cookies=_cookies_for("acc-h"))
     step_id = resp.json()["steps"][0]["id"]
     client.post(
         f"/api/onboarding/complete-step/{step_id}",
-        headers={"X-Account-ID": "acc-h"},
+        cookies=_cookies_for("acc-h"),
     )
 
-    resp2 = client.post("/api/onboarding/skip-all", headers={"X-Account-ID": "acc-h"})
+    resp2 = client.post("/api/onboarding/skip-all", cookies=_cookies_for("acc-h"))
     data = resp2.json()
     assert data["completed_steps"] == 1
     assert data["skipped_steps"] == 4
     assert data["all_done"] is True
+
+
+# ---------------------------------------------------------------------------
+# POST /api/onboarding/session
+# ---------------------------------------------------------------------------
+
+def test_create_session_sets_cookie():
+    """POST /session creates the signed cookie."""
+    resp = client.post("/api/onboarding/session?account_id=test-account")
+    assert resp.status_code == 200
+    assert resp.json()["account_id"] == "test-account"
+    # The response should contain the Set-Cookie header
+    cookies_from_resp = resp.cookies
+    assert "onboarding_session" in cookies_from_resp
+
+    # Use the cookie to fetch progress
+    cookie_val = cookies_from_resp["onboarding_session"]
+    resp2 = client.get(
+        "/api/onboarding/progress",
+        cookies={"onboarding_session": cookie_val},
+    )
+    assert resp2.status_code == 200
+    assert resp2.json()["account_id"] == "test-account"
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +230,7 @@ def test_skip_all_preserves_completed_steps():
 
 def test_progress_response_shape():
     """Verify the GET /progress response matches ProgressOut schema."""
-    resp = client.get("/api/onboarding/progress", headers={"X-Account-ID": "acc-i"})
+    resp = client.get("/api/onboarding/progress", cookies=_cookies_for("acc-i"))
     data = resp.json()
 
     assert "account_id" in data
@@ -222,12 +253,12 @@ def test_progress_response_shape():
 
 def test_step_out_response_shape():
     """Verify the POST /complete-step response matches StepOut schema."""
-    resp = client.get("/api/onboarding/progress", headers={"X-Account-ID": "acc-j"})
+    resp = client.get("/api/onboarding/progress", cookies=_cookies_for("acc-j"))
     step_id = resp.json()["steps"][0]["id"]
 
     resp2 = client.post(
         f"/api/onboarding/complete-step/{step_id}",
-        headers={"X-Account-ID": "acc-j"},
+        cookies=_cookies_for("acc-j"),
     )
     data = resp2.json()
 

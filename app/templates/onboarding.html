@@ -13,6 +13,8 @@
     --brand-text: #111827;
     --brand-text-muted: #6b7280;
     --brand-text-on-primary: #ffffff;
+    --brand-text-on-accent: #ffffff;
+    --brand-text-on-muted: #ffffff;
     --brand-border: #e5e7eb;
     --font-heading: Inter, system-ui, -apple-system, sans-serif;
     --font-body: Inter, system-ui, -apple-system, sans-serif;
@@ -35,6 +37,37 @@
     line-height: 1.6;
     min-height: 100vh;
   }
+
+  /* ---- navigation ---- */
+  .nav {
+    background: var(--brand-primary);
+    padding: var(--space-3) var(--space-4);
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    box-shadow: var(--shadow-md);
+  }
+  .nav-brand {
+    font-family: var(--font-heading);
+    font-weight: 700;
+    font-size: 1.05rem;
+    color: var(--brand-text-on-primary);
+    text-decoration: none;
+  }
+  .nav-spacer { flex: 1; }
+  .nav-link {
+    font-family: var(--font-body);
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--brand-text-on-primary);
+    text-decoration: none;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    transition: background 0.15s ease;
+  }
+  .nav-link:hover,
+  .nav-link.active { background: rgba(255,255,255,0.15); }
+
   .container {
     max-width: 640px;
     margin: 0 auto;
@@ -99,8 +132,8 @@
     margin-top: 2px;
   }
   .step-status.pending { border: 2px solid var(--brand-border); color: var(--brand-text-muted); }
-  .step-status.done { background: var(--brand-accent); color: #fff; }
-  .step-status.skipped-status { background: var(--brand-text-muted); color: #fff; }
+  .step-status.done { background: var(--brand-accent); color: var(--brand-text-on-accent); }
+  .step-status.skipped-status { background: var(--brand-text-muted); color: var(--brand-text-on-muted); }
   .step-content { flex: 1; }
   .step-content h3 {
     font-family: var(--font-heading);
@@ -172,6 +205,13 @@
 </style>
 </head>
 <body>
+<nav class="nav" aria-label="Main navigation">
+  <a class="nav-brand" href="/">Byoc FastAPI Alembic r5c</a>
+  <span class="nav-spacer"></span>
+  <a class="nav-link" href="/">Orders</a>
+  <a class="nav-link active" href="/api/onboarding/page" aria-current="page">Onboarding</a>
+</nav>
+
 <div class="container" id="app">
   <header>
     <h1>Onboarding</h1>
@@ -203,7 +243,7 @@
         <span id="progress-pct">0%</span>
       </div>
       <div class="progress-bar">
-        <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+        <div id="progress-fill" class="progress-fill"></div>
       </div>
     </div>
 
@@ -229,8 +269,6 @@
   var progressPct = document.getElementById('progress-pct');
   var progressFill = document.getElementById('progress-fill');
 
-  var accountId = null;
-
   function showState(state) {
     loadingEl.classList.add('hidden');
     errorEl.classList.add('hidden');
@@ -243,7 +281,7 @@
   }
 
   function fetchProgress() {
-    fetch('/api/onboarding/progress', { headers: { 'X-Account-ID': accountId } })
+    fetch('/api/onboarding/progress', { credentials: 'same-origin' })
       .then(function(resp) {
         if (!resp.ok) {
           if (resp.status === 401) {
@@ -273,13 +311,16 @@
     var pct = data.percent_complete;
     progressText.textContent = data.completed_steps + ' of ' + data.total_steps + ' complete';
     progressPct.textContent = pct + '%';
-    progressFill.style.width = pct + '%';
+    progressFill.style.setProperty('width', pct + '%');
     if (data.all_done) { allDoneEl.classList.remove('hidden'); }
     else { allDoneEl.classList.add('hidden'); }
   }
 
   function renderSteps(data) {
-    stepListEl.innerHTML = '';
+    // Remove existing cards without innerHTML
+    while (stepListEl.firstChild) {
+      stepListEl.removeChild(stepListEl.firstChild);
+    }
     data.steps.forEach(function(step) {
       var card = document.createElement('div');
       card.className = 'step-card';
@@ -330,7 +371,7 @@
     allBtns.forEach(function(b) { b.disabled = true; });
     fetch('/api/onboarding/complete-step/' + stepId, {
       method: 'POST',
-      headers: { 'X-Account-ID': accountId }
+      credentials: 'same-origin'
     }).then(function() { fetchProgress(); })
       .catch(function() { fetchProgress(); });
   }
@@ -339,20 +380,12 @@
     skipAllBtn.disabled = true;
     fetch('/api/onboarding/skip-all', {
       method: 'POST',
-      headers: { 'X-Account-ID': accountId }
+      credentials: 'same-origin'
     }).then(function() { fetchProgress(); })
       .catch(function() { skipAllBtn.disabled = false; });
   }
 
-  function detectAccount() {
-    var stored = localStorage.getItem('orkosi_account_id');
-    if (stored) { accountId = stored; return; }
-    accountId = 'acct_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-    localStorage.setItem('orkosi_account_id', accountId);
-  }
-
   skipAllBtn.addEventListener('click', skipAll);
-  detectAccount();
   showState('loading');
   fetchProgress();
 })();
