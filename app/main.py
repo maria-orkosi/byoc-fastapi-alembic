@@ -12,6 +12,11 @@ engine = create_engine(DATABASE_URL)
 app = FastAPI(title="Orders")
 
 
+@app.get("/ready")
+def ready():
+    return {"ready": True}
+
+
 @app.get("/healthz")
 def healthz():
     with engine.connect() as conn:
