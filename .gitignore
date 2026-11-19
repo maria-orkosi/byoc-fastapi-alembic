@@ -1,0 +1,9 @@
+# Python tooling the repository never carries (a task container creating its virtualenv in the checkout stays out of the commit)
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.env
