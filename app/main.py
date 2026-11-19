@@ -24,3 +24,8 @@ def orders():
     with engine.connect() as conn:
         rows = conn.execute(text("select id, total from orders order by id")).all()
     return [{"id": r.id, "total": float(r.total)} for r in rows]
+
+
+@app.get("/ready")
+def ready():
+    return {"ready": True}
