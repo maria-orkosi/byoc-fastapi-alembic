@@ -1,0 +1,36 @@
+{
+  "companyName": "Byoc FastAPI Alembic r5c",
+  "tagline": "Byoc FastAPI Alembic r5c runs on Orkosi from its own code",
+  "description": "Byoc FastAPI Alembic r5c is brought to Orkosi as its own code and run as it is: every part detected, placed and deployed without a remake.",
+  "targetAudience": "saas",
+  "industry": "technology",
+  "logo": {
+    "type": "text",
+    "mark": "BFA"
+  },
+  "pricing": {
+    "tiers": [
+      {
+        "name": "Free",
+        "price": "$0",
+        "period": "/month",
+        "features": [
+          "Basic code detection",
+          "Standard deployment pipeline",
+          "Community support"
+        ]
+      },
+      {
+        "name": "Pro",
+        "price": "$49",
+        "period": "/month",
+        "features": [
+          "Everything in Free",
+          "Priority deployment",
+          "Advanced detection rules",
+          "Dedicated support"
+        ]
+      }
+    ]
+  }
+}
