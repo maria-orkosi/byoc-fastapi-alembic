@@ -7,23 +7,14 @@
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <style>
     :root {
-      --brand-bg: #0d1117;
-      --brand-surface: #21262d;
-      --brand-surface-hover: #30363d;
-      --brand-surface-raised: #161b22;
-      --brand-border: #30363d;
-      --brand-text-primary: #c9d1d9;
-      --brand-text-secondary: #8b949e;
-      --brand-accent: #58a6ff;
-      --brand-accent-node: #4A90D9;
-      --brand-error: #f85149;
+      color-scheme: dark;
     }
 
     body {
       margin: 0;
       padding: 24px;
-      background: var(--brand-bg);
-      color: var(--brand-text-primary);
+      background: Canvas;
+      color: CanvasText;
       font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
     h1 {
@@ -34,7 +25,7 @@
     }
     .subtitle {
       text-align: center;
-      color: var(--brand-text-secondary);
+      color: GrayText;
       font-size: 0.875rem;
       margin-bottom: 24px;
     }
@@ -48,15 +39,15 @@
     .controls button, .controls input {
       padding: 8px 16px;
       border-radius: 6px;
-      border: 1px solid var(--brand-border);
-      background: var(--brand-surface);
-      color: var(--brand-text-primary);
+      border: 1px solid ButtonBorder;
+      background: ButtonFace;
+      color: ButtonText;
       font-family: inherit;
       font-size: 0.875rem;
       cursor: pointer;
     }
     .controls button:hover {
-      background: var(--brand-surface-hover);
+      filter: brightness(1.15);
     }
     .controls input {
       width: 200px;
@@ -64,7 +55,7 @@
     #graph {
       width: 100%;
       height: 70vh;
-      border: 1px solid var(--brand-border);
+      border: 1px solid ButtonBorder;
       border-radius: 8px;
     }
     #rollback-result {
@@ -72,8 +63,8 @@
       max-width: 600px;
       padding: 16px;
       border-radius: 8px;
-      background: var(--brand-surface-raised);
-      border: 1px solid var(--brand-border);
+      background: Canvas;
+      border: 1px solid ButtonBorder;
       display: none;
     }
     #rollback-result h3 {
@@ -81,14 +72,14 @@
       font-size: 1rem;
     }
     #rollback-result pre {
-      background: var(--brand-bg);
+      background: Canvas;
       padding: 12px;
       border-radius: 6px;
       overflow-x: auto;
       font-size: 0.8125rem;
     }
     .error {
-      color: var(--brand-error);
+      color: var(--color-error);
     }
   </style>
 </head>
@@ -118,7 +109,11 @@
     function showError(msg) {
       var el = document.getElementById('rollback-result');
       el.style.display = 'block';
-      el.innerHTML = '<p class="error">' + msg + '</p>';
+      el.textContent = '';
+      var p = document.createElement('p');
+      p.className = 'error';
+      p.textContent = msg;
+      el.appendChild(p);
     }
 
     /**
@@ -194,7 +189,7 @@
             y: [lane[e.from] || 0, lane[e.to] || 0],
             mode: 'lines',
             line: {
-              color: isDashed ? cssVar('--brand-accent') : cssVar('--brand-text-secondary'),
+              color: isDashed ? cssVar('--color-accent') : cssVar('--color'),
               width: isDashed ? 1.5 : 2,
               dash: isDashed ? 'dash' : 'solid'
             },
@@ -220,18 +215,18 @@
           mode: 'markers+text',
           marker: {
             size: isHead ? 28 : 22,
-            color: isHead ? cssVar('--brand-accent-node') : cssVar('--brand-surface'),
+            color: isHead ? cssVar('--color-accent') : cssVar('--color'),
             line: {
-              color: isHead ? cssVar('--brand-accent') : cssVar('--brand-border'),
+              color: isHead ? cssVar('--color-accent') : cssVar('--color-border'),
               width: isHead ? 3 : 1.5
             },
             symbol: isHead ? 'diamond' : 'circle'
           },
-          textfont: { color: cssVar('--brand-text-primary'), size: 10 },
+          textfont: { color: cssVar('--color-text'), size: 10 },
           hovertext: nodeList.map(function(n) {
             return '<b>Revision:</b> ' + n.id +
                    '<br><b>Message:</b> ' + (n.docstring || 'N/A') +
-                   (isHead ? '<br><b>⚡ HEAD</b>' : '');
+                   (isHead ? '<br><b>HEAD</b>' : '');
           }),
           hoverinfo: 'text',
           type: 'scatter',
@@ -248,7 +243,7 @@
       if (dependsOnEdges.length) {
         allEdgeTraces.push({
           x: [null], y: [null], mode: 'lines',
-          line: { color: cssVar('--brand-accent'), width: 1.5, dash: 'dash' },
+          line: { color: cssVar('--color-accent') || '#fa0', width: 1.5, dash: 'dash' },
           name: 'depends_on', showlegend: true
         });
       }
@@ -256,22 +251,22 @@
       var plotLayout = {
         title: {
           text: 'Migration Chain (Heads: ' + heads.join(', ') + ')',
-          font: { color: cssVar('--brand-text-primary') }
+          font: { color: cssVar('--color-text') || '#ccc' }
         },
-        paper_bgcolor: cssVar('--brand-bg'),
-        plot_bgcolor: cssVar('--brand-bg'),
-        font: { color: cssVar('--brand-text-primary') },
+        paper_bgcolor: cssVar('--color-bg') || '#111',
+        plot_bgcolor: cssVar('--color-bg') || '#111',
+        font: { color: cssVar('--color-text') || '#ccc' },
         xaxis: {
           showgrid: false, zeroline: false, showticklabels: false,
-          title: { text: 'generation →', font: { color: cssVar('--brand-text-secondary'), size: 10 } }
+          title: { text: 'generation ->', font: { color: cssVar('--color-text-secondary') || '#888', size: 10 } }
         },
         yaxis: { showgrid: false, zeroline: false, showticklabels: false },
         margin: { l: 40, r: 40, t: 60, b: 100 },
         hovermode: 'closest',
         legend: {
-          font: { color: cssVar('--brand-text-primary') },
-          bgcolor: cssVar('--brand-surface-raised'),
-          bordercolor: cssVar('--brand-border')
+          font: { color: cssVar('--color-text') || '#ccc' },
+          bgcolor: cssVar('--color-bg') || '#111',
+          bordercolor: cssVar('--color-border') || '#444'
         }
       };
 
@@ -305,12 +300,24 @@
         })
         .then(function(data) {
           resultEl.style.display = 'block';
-          var steps = (data.downgrade_steps || []).join(' → ');
+          resultEl.textContent = '';
+
+          var h3 = document.createElement('h3');
+          h3.textContent = 'Rollback to ' + target;
+          resultEl.appendChild(h3);
+
+          var steps = (data.downgrade_steps || []).join(' -> ');
+          var p = document.createElement('p');
+          var strong = document.createElement('strong');
+          strong.textContent = steps || '(already at target)';
+          p.appendChild(document.createTextNode('Sequence: '));
+          p.appendChild(strong);
+          resultEl.appendChild(p);
+
           var cmds = (data.commands || []).join('\n');
-          resultEl.innerHTML =
-            '<h3>Rollback to ' + target + '</h3>' +
-            '<p>Sequence: <strong>' + (steps || '(already at target)') + '</strong></p>' +
-            '<pre>' + (cmds || '(no steps needed)') + '</pre>';
+          var pre = document.createElement('pre');
+          pre.textContent = cmds || '(no steps needed)';
+          resultEl.appendChild(pre);
         })
         .catch(function(err) {
           showError(err.message);

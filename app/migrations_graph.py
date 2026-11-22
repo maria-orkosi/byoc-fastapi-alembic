@@ -8,24 +8,50 @@ from typing import Optional
 import networkx as nx
 
 
-def _extract_assignment_value(filepath: str, var_name: str) -> Optional[str]:
-    """Parse a Python file and return the string value assigned to *var_name*."""
+def _extract_assignment_value(filepath: str, var_name: str):
+    """Parse a Python file and return the value assigned to *var_name*.
+
+    Returns:
+        * ``None`` when the variable is not found or assigned ``None``.
+        * A ``str`` for single-string assignments.
+        * A ``list[str]`` for tuple/list assignments (e.g. merge ``down_revision``).
+    """
     with open(filepath, "r", encoding="utf-8") as fh:
         source = fh.read()
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return None
+
+    def _value_from_node(node):
+        """Extract the value from an assignment value node."""
+        if isinstance(node, ast.Constant):
+            if node.value is None:
+                return None
+            if isinstance(node.value, str):
+                return node.value
+            return node.value
+        if isinstance(node, (ast.Tuple, ast.List)):
+            values = []
+            for elt in node.elts:
+                if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                    values.append(elt.value)
+            return values if values else None
+        return None
+
     for node in ast.walk(tree):
+        # Handle plain assignments: revision = "abc"
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id == var_name:
-                    if isinstance(node.value, ast.Constant) and isinstance(
-                        node.value.value, str
-                    ):
-                        return node.value.value
-                    if isinstance(node.value, ast.Constant) and node.value.value is None:
-                        return None
+                    return _value_from_node(node.value)
+
+        # Handle annotated assignments: revision: str = "abc"
+        if isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == var_name:
+                if node.value is not None:
+                    return _value_from_node(node.value)
+
     return None
 
 
@@ -42,25 +68,45 @@ def _extract_docstring(filepath: str) -> Optional[str]:
 
 
 def _extract_depends_on(filepath: str) -> Optional[list]:
-    """Return the ``depends_on`` list from a migration file, or None."""
+    """Return the ``depends_on`` list from a migration file, or None.
+
+    Handles bare strings, tuples, and lists, as well as ``ast.AnnAssign``.
+    """
     with open(filepath, "r", encoding="utf-8") as fh:
         source = fh.read()
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return None
+
+    def _collect_strings(node):
+        """Collect string values from a Constant, Tuple, or List node."""
+        if isinstance(node, ast.Constant):
+            if isinstance(node.value, str):
+                return [node.value]
+            if node.value is None:
+                return None
+        if isinstance(node, (ast.Tuple, ast.List)):
+            values = []
+            for elt in node.elts:
+                if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                    values.append(elt.value)
+            return values if values else None
+        return None
+
     for node in ast.walk(tree):
+        # Plain assignment: depends_on = [...]
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id == "depends_on":
-                    if isinstance(node.value, ast.List):
-                        values = []
-                        for elt in node.value.elts:
-                            if isinstance(elt, ast.Constant) and isinstance(
-                                elt.value, str
-                            ):
-                                values.append(elt.value)
-                        return values
+                    return _collect_strings(node.value)
+
+        # Annotated assignment: depends_on: type = [...]
+        if isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == "depends_on":
+                if node.value is not None:
+                    return _collect_strings(node.value)
+
     return None
 
 
@@ -101,7 +147,11 @@ def build_dag(migrations: list[dict]) -> nx.DiGraph:
     """Build a directed acyclic graph where nodes are revision IDs and edges
     point from a parent (down_revision) to child (revision).
 
-    Branch merges declared via ``depends_on`` are also added as edges.
+    Branch merges declared via ``depends_on`` are also added as edges
+    with ``kind=\"depends_on\"``.
+
+    When ``down_revision`` is a list (merge migration), one ``kind=\"parent\"``
+    edge is added for each element.
     """
     G = nx.DiGraph()
 
@@ -115,11 +165,14 @@ def build_dag(migrations: list[dict]) -> nx.DiGraph:
         label = f"{rev[:4]}: {first_line}" if first_line else rev[:4]
         G.add_node(rev, label=label, docstring=m.get("docstring"), file=m.get("file"))
 
-        if m["down_revision"] is not None:
-            down = m["down_revision"]
-            G.add_edge(down, rev, kind="parent")
-            if down not in G.nodes:
-                G.add_node(down, label=down[:4])
+        down = m["down_revision"]
+        if down is not None:
+            # Handle both a single string and a list of parent revisions
+            parents = down if isinstance(down, list) else [down]
+            for parent in parents:
+                G.add_edge(parent, rev, kind="parent")
+                if parent not in G.nodes:
+                    G.add_node(parent, label=parent[:4])
 
         if m.get("depends_on"):
             for dep in m["depends_on"]:
@@ -146,6 +199,13 @@ def compute_rollback_path(
     """Compute the ordered list of downgrade steps from every current head
     down to (and including) *target_revision*.
 
+    Only ``kind='parent'`` edges are traversed — ``depends_on`` edges are
+    excluded so the printed ``alembic downgrade`` sequence is valid.
+
+    For merge heads (one head with multiple parent edges), the steps are
+    ordered so that downgrading each revision directly (``alembic downgrade
+    <rev>``) is valid.
+
     Returns a list of revision IDs to downgrade **to** (each step moves
     the database from one revision to its parent).  The first step is
     always a downgrade from a head to its parent; the final step
@@ -157,13 +217,21 @@ def compute_rollback_path(
     if not heads:
         return None
 
-    # For each head, find the shortest path back to target_revision
-    # Build the reverse graph for traversal
-    rev = G.reverse(copy=True)
+    # Build a subgraph containing only 'parent' edges (ignore 'depends_on')
+    parent_G = nx.DiGraph()
+    for u, v, d in G.edges(data=True):
+        if d.get("kind", "parent") == "parent":
+            parent_G.add_edge(u, v)
+    # Copy node data
+    for n, data in G.nodes(data=True):
+        if n not in parent_G:
+            parent_G.add_node(n, **data)
+
+    rev = parent_G.reverse(copy=True)
 
     for head in heads:
         if head == target_revision:
-            # We are already at target; single downgrade to it (no-op) → empty
+            # We are already at target; single downgrade to it (no-op) -> empty
             return []
         try:
             path = nx.shortest_path(rev, source=head, target=target_revision)
@@ -171,7 +239,7 @@ def compute_rollback_path(
             # The downgrade steps are the intermediate revision IDs
             # excluding the head itself (since we start there):
             # downgrade to path[1], then path[2], ..., target_revision
-            return path[1:]  # list of revisons to downgrade **to**
+            return path[1:]  # list of revisions to downgrade **to**
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             continue
 

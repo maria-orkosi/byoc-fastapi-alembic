@@ -19,14 +19,39 @@ from app.migrations_graph import (
 )
 
 
-def _write_migration(dir_path, filename, revision, down_revision, depends_on, docstring):
-    """Helper to write a minimal Alembic migration file."""
-    dr = "None" if down_revision is None else f'"{down_revision}"'
-    do = "None" if depends_on is None else repr(depends_on)
+def _write_migration(dir_path, filename, revision, down_revision, depends_on, docstring, use_annassign=False):
+    """Helper to write a minimal Alembic migration file.
+
+    When *use_annassign* is True, writes Alembic >=1.7 annotated style
+    (``revision: str = "..."``).
+    """
+    def dr_repr(val):
+        if val is None:
+            return "None"
+        if isinstance(val, list):
+            return "('" + "', '".join(val) + "')"
+        return f'"{val}"'
+
+    def do_repr(val):
+        if val is None:
+            return "None"
+        if isinstance(val, list):
+            return "[" + ", ".join(f'"{x}"' for x in val) + "]"
+        return f'"{val}"'
+
     content = f'"""{docstring}"""\n'
-    content += f'revision = "{revision}"\n'
-    content += f'down_revision = {dr}\n'
-    content += f'depends_on = {do}\n'
+    if use_annassign:
+        content += f'revision: str = "{revision}"\n'
+        dr_val = dr_repr(down_revision)
+        if isinstance(down_revision, list):
+            content += f'down_revision: tuple = {dr_val}\n'
+        else:
+            content += f'down_revision: str = {dr_val}\n'
+        content += f'depends_on: list = {do_repr(depends_on)}\n'
+    else:
+        content += f'revision = "{revision}"\n'
+        content += f'down_revision = {dr_repr(down_revision)}\n'
+        content += f'depends_on = {do_repr(depends_on)}\n'
     content += '\ndef upgrade():\n    pass\n\ndef downgrade():\n    pass\n'
     with open(os.path.join(dir_path, filename), "w", encoding="utf-8") as f:
         f.write(content)
@@ -80,7 +105,55 @@ class TestParseMigrations:
         migrations = parse_migrations("/nonexistent/path")
         assert migrations == []
 
-    def test_skips_init_py(self):
+    def test_parse_annassign_style(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_migration(tmpdir, "0001_init.py", "0001", None, None,
+                             "create initial tables", use_annassign=True)
+            migrations = parse_migrations(tmpdir)
+            assert len(migrations) == 1
+            m = migrations[0]
+            assert m["revision"] == "0001"
+            assert m["down_revision"] is None
+            assert m["depends_on"] is None
+            assert m["docstring"] == "create initial tables"
+
+    def test_parse_annassign_with_down_revision(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_migration(tmpdir, "0001_init.py", "0001", None, None,
+                             "init", use_annassign=True)
+            _write_migration(tmpdir, "0002_add.py", "0002", "0001", None,
+                             "add column", use_annassign=True)
+            migrations = parse_migrations(tmpdir)
+            assert len(migrations) == 2
+            assert migrations[0]["revision"] == "0001"
+            assert migrations[1]["revision"] == "0002"
+            assert migrations[1]["down_revision"] == "0001"
+
+    def test_parse_tuple_down_revision_merge(self):
+        """Merge migrations use tuple down_revision: ('a', 'b')."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_migration(tmpdir, "0001_a.py", "0001a", None, None, "branch a")
+            _write_migration(tmpdir, "0001_b.py", "0001b", None, None, "branch b")
+            # Merge migration with tuple down_revision
+            content = '"""merge"""\nrevision = "0002"\ndown_revision = (\'0001a\', \'0001b\')\ndepends_on = None\n\n'
+            content += 'def upgrade():\n    pass\n\ndef downgrade():\n    pass\n'
+            with open(os.path.join(tmpdir, "0002_merge.py"), "w") as f:
+                f.write(content)
+            migrations = parse_migrations(tmpdir)
+            assert len(migrations) == 3
+            merge = [m for m in migrations if m["revision"] == "0002"][0]
+            assert merge["down_revision"] == ["0001a", "0001b"]
+
+    def test_parse_depends_on_bare_string(self):
+        """depends_on as a bare string (not a list)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content = '"""test"""\nrevision = "0002"\ndown_revision = "0001"\ndepends_on = "0001a"\n\n'
+            content += 'def upgrade():\n    pass\n\ndef downgrade():\n    pass\n'
+            with open(os.path.join(tmpdir, "0002_test.py"), "w") as f:
+                f.write(content)
+            migrations = parse_migrations(tmpdir)
+            assert len(migrations) == 1
+            assert migrations[0]["depends_on"] == ["0001a"]
         with tempfile.TemporaryDirectory() as tmpdir:
             Path(tmpdir, "__init__.py").write_text("")
             _write_migration(tmpdir, "0001_init.py", "0001", None, None,
@@ -144,6 +217,36 @@ class TestBuildDag:
             migrations = parse_migrations(tmpdir)
             G = build_dag(migrations)
             assert G.nodes["abcd1234"]["label"] == "abcd: add users table"
+
+    def test_merge_with_tuple_down_revision(self):
+        """Merge migration with tuple down_revision: build_dag adds parent edges for each."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_migration(tmpdir, "0001a_init.py", "0001a", None, None, "branch a")
+            _write_migration(tmpdir, "0001b_init.py", "0001b", None, None, "branch b")
+            # Merge with tuple down_revision
+            content = '"""merge"""\nrevision = "0002"\ndown_revision = (\'0001a\', \'0001b\')\ndepends_on = None\n\n'
+            content += 'def upgrade():\n    pass\n\ndef downgrade():\n    pass\n'
+            with open(os.path.join(tmpdir, "0002_merge.py"), "w") as f:
+                f.write(content)
+            migrations = parse_migrations(tmpdir)
+            G = build_dag(migrations)
+            assert G.has_edge("0001a", "0002")
+            assert G.has_edge("0001b", "0002")
+            assert G.edges["0001a", "0002"]["kind"] == "parent"
+            assert G.edges["0001b", "0002"]["kind"] == "parent"
+            assert G.number_of_nodes() == 3
+            assert G.number_of_edges() == 2
+
+    def test_depends_on_as_tuple(self):
+        """depends_on given as a tuple, not just a list."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_migration(tmpdir, "0001_init.py", "0001", None, None, "init")
+            content = '"""test"""\nrevision = "0002"\ndown_revision = "0001"\ndepends_on = (\'0001a\', \'0001b\')\n\n'
+            content += 'def upgrade():\n    pass\n\ndef downgrade():\n    pass\n'
+            with open(os.path.join(tmpdir, "0002_test.py"), "w") as f:
+                f.write(content)
+            migrations = parse_migrations(tmpdir)
+            assert migrations[0]["depends_on"] == ["0001a", "0001b"]
 
 
 class TestFindHeadsAndRoots:
@@ -209,6 +312,58 @@ class TestComputeRollbackPath:
         G = build_dag([])
         path = compute_rollback_path(G, "0001")
         assert path is None
+
+    def test_rollback_with_branch(self):
+        """Rollback on a simple branch (one head with multiple parents via depends_on).
+
+        depends_on edges should NOT be traversed for rollback.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_migration(tmpdir, "0001_init.py", "0001", None, None, "init")
+            _write_migration(tmpdir, "0001a_branch.py", "0001a", "0001", None, "branch a")
+            _write_migration(tmpdir, "0001b_branch.py", "0001b", "0001", None, "branch b")
+            # Merge depends_on both branches
+            _write_migration(tmpdir, "0002_merge.py", "0002", "0001a",
+                             ["0001b"], "merge")
+            migrations = parse_migrations(tmpdir)
+            G = build_dag(migrations)
+            # Rollback from head 0002 to 0001 - should only follow parent edges
+            path = compute_rollback_path(G, "0001")
+            assert path is not None
+            # Path follows parent: 0002 -> 0001a -> 0001 (skips depends_on 0001b)
+            assert path == ["0001a", "0001"]
+
+    def test_rollback_with_merge_tuple(self):
+        """Rollback through a merge that uses tuple down_revision."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_migration(tmpdir, "0001a_init.py", "0001a", None, None, "branch a")
+            _write_migration(tmpdir, "0001b_init.py", "0001b", None, None, "branch b")
+            content = '"""merge"""\nrevision = "0002"\ndown_revision = (\'0001a\', \'0001b\')\ndepends_on = None\n\n'
+            content += 'def upgrade():\n    pass\n\ndef downgrade():\n    pass\n'
+            with open(os.path.join(tmpdir, "0002_merge.py"), "w") as f:
+                f.write(content)
+            migrations = parse_migrations(tmpdir)
+            G = build_dag(migrations)
+            # Rollback from head 0002 to 0001a
+            path = compute_rollback_path(G, "0001a")
+            assert path is not None
+            assert path == ["0001a"]
+
+    def test_rollback_ignores_depends_on_edges(self):
+        """depends_on edges must not be used for rollback traversal."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_migration(tmpdir, "0001_init.py", "0001", None, None, "init")
+            _write_migration(tmpdir, "0001a_branch.py", "0001a", "0001", None, "branch")
+            # Migration 0002 has down_revision=0001 and depends_on=0001a
+            # Rollback from 0002 should only go through 0001, not 0001a
+            _write_migration(tmpdir, "0002_next.py", "0002", "0001",
+                             ["0001a"], "next step")
+            migrations = parse_migrations(tmpdir)
+            G = build_dag(migrations)
+            path = compute_rollback_path(G, "0001")
+            assert path is not None
+            # Should be [0001], NOT [0001a, 0001] (depends_on edges ignored)
+            assert path == ["0001"]
 
 
 class TestGraphToJson:
