@@ -6,6 +6,8 @@ import os
 from fastapi import FastAPI
 from sqlalchemy import create_engine, text
 
+from app.scanner import scan_all
+
 DATABASE_URL = os.environ["DATABASE_URL"]
 SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY")
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)  # a pooled connection the server closed (idle-session timeout) is replaced, not raised
@@ -24,3 +26,10 @@ def orders():
     with engine.connect() as conn:
         rows = conn.execute(text("select id, total from orders order by id")).all()
     return [{"id": r.id, "total": float(r.total)} for r in rows]
+
+
+@app.get("/scan")
+def scan_modules():
+    """Scan and categorise every Python module under app/."""
+    return scan_all("app")
+
