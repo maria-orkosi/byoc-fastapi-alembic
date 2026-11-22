@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Migrations Graph - Byoc FastAPI Alembic r5c</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    :root {
+      --brand-bg: #0d1117;
+      --brand-surface: #21262d;
+      --brand-surface-hover: #30363d;
+      --brand-surface-raised: #161b22;
+      --brand-border: #30363d;
+      --brand-text-primary: #c9d1d9;
+      --brand-text-secondary: #8b949e;
+      --brand-accent: #58a6ff;
+      --brand-accent-node: #4A90D9;
+      --brand-error: #f85149;
+    }
+
+    body {
+      margin: 0;
+      padding: 24px;
+      background: var(--brand-bg);
+      color: var(--brand-text-primary);
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    h1 {
+      text-align: center;
+      font-weight: 600;
+      font-size: 1.5rem;
+      margin-bottom: 8px;
+    }
+    .subtitle {
+      text-align: center;
+      color: var(--brand-text-secondary);
+      font-size: 0.875rem;
+      margin-bottom: 24px;
+    }
+    .controls {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+    .controls button, .controls input {
+      padding: 8px 16px;
+      border-radius: 6px;
+      border: 1px solid var(--brand-border);
+      background: var(--brand-surface);
+      color: var(--brand-text-primary);
+      font-family: inherit;
+      font-size: 0.875rem;
+      cursor: pointer;
+    }
+    .controls button:hover {
+      background: var(--brand-surface-hover);
+    }
+    .controls input {
+      width: 200px;
+    }
+    #graph {
+      width: 100%;
+      height: 70vh;
+      border: 1px solid var(--brand-border);
+      border-radius: 8px;
+    }
+    #rollback-result {
+      margin: 16px auto;
+      max-width: 600px;
+      padding: 16px;
+      border-radius: 8px;
+      background: var(--brand-surface-raised);
+      border: 1px solid var(--brand-border);
+      display: none;
+    }
+    #rollback-result h3 {
+      margin-top: 0;
+      font-size: 1rem;
+    }
+    #rollback-result pre {
+      background: var(--brand-bg);
+      padding: 12px;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 0.8125rem;
+    }
+    .error {
+      color: var(--brand-error);
+    }
+  </style>
+</head>
+<body>
+  <h1>Migrations Dependency Graph</h1>
+  <p class="subtitle">Byoc FastAPI Alembic r5c</p>
+
+  <div class="controls">
+    <button id="btn-refresh">Refresh Graph</button>
+    <input type="text" id="rollback-target" placeholder="Target revision (e.g. 0001)">
+    <button id="btn-rollback">Compute Rollback</button>
+  </div>
+
+  <div id="graph"></div>
+  <div id="rollback-result"></div>
+
+  <script>
+    var GRAPH_API = '/migrations/graph';
+    var ROLLBACK_API = '/migrations/rollback/';
+
+    function showError(msg) {
+      var el = document.getElementById('rollback-result');
+      el.style.display = 'block';
+      el.innerHTML = '<p class="error">' + msg + '</p>';
+    }
+
+    function renderGraph(data) {
+      var nodes = data.nodes;
+      var edges = data.edges;
+
+      // Build adjacency for layered layout (simple topological)
+      var nodeIndex = {};
+      nodes.forEach(function(n, i) { nodeIndex[n.id] = i; });
+
+      // Simple horizontal chain layout
+      var xs = nodes.map(function(_, i) { return i; });
+      var ys = nodes.map(function() { return 0; });
+
+      var edgeTraces = edges.map(function(e) {
+        var src = nodeIndex[e.from];
+        var tgt = nodeIndex[e.to];
+        return {
+          x: [src, tgt],
+          y: [0, 0],
+          mode: 'lines',
+          line: { color: getComputedStyle(document.documentElement).getPropertyValue('--brand-accent').trim() || '#58a6ff', width: 2 },
+          hoverinfo: 'none',
+          showlegend: false
+        };
+      });
+
+      var nodeTrace = {
+        x: xs,
+        y: ys,
+        text: nodes.map(function(n) { return n.label; }),
+        textposition: 'bottom center',
+        mode: 'markers+text',
+        marker: {
+          size: 24,
+          color: getComputedStyle(document.documentElement).getPropertyValue('--brand-accent-node').trim() || '#4A90D9',
+          line: { color: getComputedStyle(document.documentElement).getPropertyValue('--brand-accent').trim() || '#58a6ff', width: 2 }
+        },
+        textfont: { color: getComputedStyle(document.documentElement).getPropertyValue('--brand-text-primary').trim() || '#c9d1d9', size: 10 },
+        hovertext: nodes.map(function(n) {
+          return '<b>Revision:</b> ' + n.id + '<br><b>Message:</b> ' + (n.docstring || 'N/A');
+        }),
+        hoverinfo: 'text',
+        type: 'scatter',
+        showlegend: false
+      };
+
+      var layout = {
+        title: {
+          text: 'Migration Chain (Heads: ' + (data.heads || []).join(', ') + ')',
+          font: { color: getComputedStyle(document.documentElement).getPropertyValue('--brand-text-primary').trim() || '#c9d1d9' }
+        },
+        paper_bgcolor: getComputedStyle(document.documentElement).getPropertyValue('--brand-bg').trim() || '#0d1117',
+        plot_bgcolor: getComputedStyle(document.documentElement).getPropertyValue('--brand-bg').trim() || '#0d1117',
+        font: { color: getComputedStyle(document.documentElement).getPropertyValue('--brand-text-primary').trim() || '#c9d1d9' },
+        xaxis: { showgrid: false, zeroline: false, showticklabels: false },
+        yaxis: { showgrid: false, zeroline: false, showticklabels: false },
+        margin: { l: 40, r: 40, t: 60, b: 100 },
+        hovermode: 'closest'
+      };
+
+      Plotly.newPlot('graph', edgeTraces.concat([nodeTrace]), layout, { responsive: true });
+    }
+
+    function loadGraph() {
+      fetch(GRAPH_API)
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          renderGraph(data);
+        })
+        .catch(function(err) {
+          showError('Failed to load graph: ' + err.message);
+        });
+    }
+
+    function computeRollback() {
+      var target = document.getElementById('rollback-target').value.trim();
+      if (!target) {
+        showError('Please enter a target revision.');
+        return;
+      }
+      var resultEl = document.getElementById('rollback-result');
+      fetch(ROLLBACK_API + encodeURIComponent(target))
+        .then(function(r) {
+          if (!r.ok) {
+            return r.json().then(function(d) { throw new Error(d.detail); });
+          }
+          return r.json();
+        })
+        .then(function(data) {
+          resultEl.style.display = 'block';
+          var steps = data.downgrade_steps.map(function(s) { return s; }).join(' → ');
+          var cmds = data.commands.join('\n');
+          resultEl.innerHTML =
+            '<h3>Rollback to ' + target + '</h3>' +
+            '<p>Sequence: <strong>' + steps + '</strong></p>' +
+            '<pre>' + cmds + '</pre>';
+        })
+        .catch(function(err) {
+          showError(err.message);
+        });
+    }
+
+    document.getElementById('btn-refresh').addEventListener('click', loadGraph);
+    document.getElementById('btn-rollback').addEventListener('click', computeRollback);
+
+    // Load graph on page open
+    loadGraph();
+  </script>
+</body>
+</html>
