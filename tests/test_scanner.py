@@ -263,6 +263,9 @@ def test_json_serializable():
 
 def test_non_http_decorators_do_not_crash_scan():
     """shared_task(bind=True) and field_validator must not crash scan_module."""
+    import ast
+    import tempfile
+
     source = (
         '"""Module with non-HTTP decorators."""\n'
         'from celery import shared_task\n'
@@ -279,6 +282,96 @@ def test_non_http_decorators_do_not_crash_scan():
         '        return v\n'
     )
 
+    # 1) Parse and call _is_route_module, _is_background_job_module, _is_model_module
+    tree = ast.parse(source)
+    is_route, route_meta = _is_route_module(tree, source)
+    assert is_route is False, (
+        "Should not classify a module with @shared_task and @field_validator as route"
+    )
+
+    is_bg, bg_meta = _is_background_job_module(tree)
+    assert is_bg is True, "Should detect @shared_task as background job"
+    assert bg_meta is not None
+    assert "my_task" in bg_meta.task_names, (
+        f"my_task should be reported as celery task, got {bg_meta.task_names}"
+    )
+
+    is_model, model_meta = _is_model_module(tree)
+    # field_validator on a class that inherits from object, not BaseModel — no model detected
+    assert is_model is False
+
+    # 2) Write to temp file and call scan_module to ensure no crash
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as tf:
+        tf.write(source)
+        tmp_path = tf.name
+
+    try:
+        info = scan_module(tmp_path)
+        # The module has celery tasks — it should be classified as background_job
+        assert info.category == "background_job", (
+            f"Expected background_job, got {info.category}"
+        )
+    finally:
+        os.unlink(tmp_path)
+
+
+
+def test_async_handler_with_background_tasks():
+    """async def route handler with BackgroundTasks must be reported in the output."""
+    import ast
+    import tempfile
+
+    source = (
+        '"""Route with BackgroundTasks."""\n'
+        'from fastapi import APIRouter, BackgroundTasks\n'
+        '\n'
+        'router = APIRouter(prefix="/api/v1")\n'
+        '\n'
+        '@router.post("/items")\n'
+        'async def create_item(background_tasks: BackgroundTasks):\n'
+        '    background_tasks.add_task(some_task)\n'
+        '    return {"created": True}\n'
+    )
+
+    # Parse and check _is_route_module detects the BackgroundTasks arg
+    tree = ast.parse(source)
+    is_route, route_meta = _is_route_module(tree, source)
+    assert is_route is True, "Should detect APIRouter usage"
+    assert route_meta is not None
+    assert len(route_meta.background_tasks) > 0, (
+        f"Expected background_tasks in route_meta, got {route_meta.background_tasks}"
+    )
+    bt_handlers = [bt["handler"] for bt in route_meta.background_tasks]
+    assert "create_item" in bt_handlers, (
+        f"create_item should have BackgroundTasks, got handlers: {bt_handlers}"
+    )
+    for bt in route_meta.background_tasks:
+        assert bt["trigger"] == "BackgroundTasks"
+
+    # Also check _is_background_job_module detects it
+    is_bg, bg_meta = _is_background_job_module(tree)
+    assert is_bg is True, "Should detect BackgroundTasks as background job"
+    assert bg_meta is not None
+    assert "create_item" in bg_meta.task_names, (
+        f"create_item should be in task_names, got {bg_meta.task_names}"
+    )
+
+    # Write to temp file, scan_module should still classify as route (primary category)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as tf:
+        tf.write(source)
+        tmp_path = tf.name
+
+    try:
+        info = scan_module(tmp_path)
+        assert info.category == "route", (
+            f"Expected route category, got {info.category}"
+        )
+        assert info.route_meta is not None
+        assert len(info.route_meta.background_tasks) > 0, (
+            "BackgroundTasks should be reported in route_meta"
+        )
+    finally:
+        os.unlink(tmp_path)
 
 def test_route_module_reports_endpoint_paths_and_handlers():
     """app/api/orders.py must report per-endpoint paths and handler names."""
@@ -332,6 +425,7 @@ if __name__ == "__main__":
         test_scan_module_nonexistent_file,
         test_json_serializable,
         test_non_http_decorators_do_not_crash_scan,
+        test_async_handler_with_background_tasks,
         test_route_module_reports_endpoint_paths_and_handlers,
     ]
 

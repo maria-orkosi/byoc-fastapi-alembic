@@ -25,6 +25,7 @@ class RouteMeta:
     path_prefix: str = ""
     endpoint_count: int = 0
     routes: list[dict[str, str]] = field(default_factory=list)  # {method, path, handler}
+    background_tasks: list[dict[str, str]] = field(default_factory=list)  # {handler, trigger}
 
 
 @dataclass
@@ -90,6 +91,20 @@ def _is_route_module(tree: ast.AST, source: str) -> tuple[bool, RouteMeta | None
         # @router.<method> or @app.<method> decorator
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             handler_name = node.name
+            # Check for BackgroundTasks in handler argument annotations
+            for arg in node.args.args:
+                if arg.annotation:
+                    # Unparse to get the annotation text (handles ast.Name, ast.Subscript, etc.)
+                    try:
+                        anno_text = ast.unparse(arg.annotation)
+                    except Exception:
+                        anno_text = ""
+                    if "BackgroundTasks" in anno_text:
+                        meta.background_tasks.append({
+                            "handler": handler_name,
+                            "trigger": "BackgroundTasks",
+                        })
+
             for decorator in node.decorator_list:
                 endpoint_path = ""
 
@@ -288,11 +303,26 @@ def _is_background_job_module(tree: ast.AST) -> tuple[bool, BackgroundJobMeta | 
                     task_names.append(node.name)
                     trigger = "celery"
 
-        if isinstance(node, ast.FunctionDef):
+            # Detect BackgroundTasks in argument annotations (async and sync)
+            for arg in node.args.args:
+                if arg.annotation:
+                    try:
+                        anno_text = ast.unparse(arg.annotation)
+                    except Exception:
+                        anno_text = ""
+                    if "BackgroundTasks" in anno_text:
+                        if node.name not in task_names:
+                            task_names.append(node.name)
+                        if not trigger or trigger == "BackgroundTasks":
+                            trigger = "BackgroundTasks"
+
+            # Also detect BackgroundTasks via Name nodes in function body (sync and async)
             for body_node in ast.walk(node):
                 if isinstance(body_node, ast.Name) and body_node.id == "BackgroundTasks":
-                    task_names.append(node.name)
-                    trigger = "BackgroundTasks"
+                    if node.name not in task_names:
+                        task_names.append(node.name)
+                    if not trigger or trigger == "BackgroundTasks":
+                        trigger = "BackgroundTasks"
 
         if isinstance(node, ast.Assign):
             for target in (node.targets if isinstance(node.targets, list) else [node.targets]):
@@ -428,6 +458,7 @@ def _info_to_dict(info: ModuleInfo) -> dict[str, Any]:
             "path_prefix": info.route_meta.path_prefix,
             "endpoint_count": info.route_meta.endpoint_count,
             "routes": info.route_meta.routes,
+            "background_tasks": info.route_meta.background_tasks,
         }
     if info.model_meta:
         d["model_meta"] = {
