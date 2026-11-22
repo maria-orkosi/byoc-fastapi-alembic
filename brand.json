@@ -1,0 +1,25 @@
+{
+  "name": "Byoc FastAPI Alembic r5c",
+  "slug": "dev-byoc-fastapi-alembic-r5c",
+  "tagline": "Byoc FastAPI Alembic r5c runs on Orkosi from its own code",
+  "description": "Byoc FastAPI Alembic r5c is brought to Orkosi as its own code and run as it is: every part detected, placed and deployed without a remake.",
+  "audience": "saas",
+  "brand_voice": {
+    "tone": "technical yet approachable",
+    "values": ["simplicity", "transparency", "developer-empowerment"],
+    "avoid": ["jargon-overload", "overselling", "fluff"]
+  },
+  "blog": {
+    "topics": [
+      "Bringing your own FastAPI code to Orkosi — workflow and benefits",
+      "Alembic migrations: why they matter and how to set them up",
+      "Postgres in your BYOC stack: patterns for API developers",
+      "From local dev to production: deploying FastAPI with zero surprises",
+      "Testing FastAPI applications with Alembic and a real database",
+      "Structuring a Python SaaS backend with FastAPI and SQLAlchemy",
+      "How Orkosi detects, places and deploys your code as-is",
+      "Building APIs that scale: FastAPI, connection pooling and Alembic"
+    ],
+    "categories": ["product", "engineering", "tutorial", "news"]
+  }
+}
