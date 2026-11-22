@@ -24,6 +24,7 @@ class RouteMeta:
     http_methods: list[str] = field(default_factory=list)
     path_prefix: str = ""
     endpoint_count: int = 0
+    routes: list[dict[str, str]] = field(default_factory=list)  # {method, path, handler}
 
 
 @dataclass
@@ -64,9 +65,14 @@ _HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options", "tr
 
 
 def _is_route_module(tree: ast.AST, source: str) -> tuple[bool, RouteMeta | None]:
-    """Detect whether *tree* defines APIRouter instances or route decorators."""
+    """Detect whether *tree* defines APIRouter instances or route decorators.
+
+    Collects per-endpoint routes with full paths (router prefix + endpoint path),
+    HTTP method, and handler name.
+    """
     meta = RouteMeta()
     has_router = False
+    routes_seen: set[tuple[str, str, str]] = set()  # dedup
 
     for node in ast.walk(tree):
         # APIRouter instantiation
@@ -83,55 +89,85 @@ def _is_route_module(tree: ast.AST, source: str) -> tuple[bool, RouteMeta | None
 
         # @router.<method> or @app.<method> decorator
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            handler_name = node.name
             for decorator in node.decorator_list:
+                endpoint_path = ""
+
+                # Unwrap @<name>(...), @<attr>(...) etc.
                 if isinstance(decorator, ast.Call):
                     dec_func = decorator.func
+                    # Extract path from first arg if it's a string constant
+                    if decorator.args:
+                        first = decorator.args[0]
+                        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                            endpoint_path = first.value
                 elif isinstance(decorator, ast.Attribute):
                     dec_func = decorator
+                elif isinstance(decorator, ast.Name):
+                    # @shared_task, @lru_cache, etc. — skip
+                    continue
                 else:
-                    dec_func = None
+                    continue
 
-                if dec_func is not None:
-                    method, prefix = _extract_decorator_info(dec_func)
+                # Skip plain Name funcs wrapped in Call (e.g. @shared_task(bind=True))
+                if isinstance(dec_func, ast.Name):
+                    continue
+
+                if isinstance(dec_func, ast.Attribute):
+                    method, _ = _extract_decorator_info(dec_func)
                     if method:
                         has_router = True
                         if method.lower() not in meta.http_methods:
                             meta.http_methods.append(method.lower())
-                        if prefix and not meta.path_prefix:
-                            meta.path_prefix = prefix
+                        # Build full path
+                        full_path = (meta.path_prefix or "") + endpoint_path
+                        route_key = (method.lower(), full_path, handler_name)
+                        if route_key not in routes_seen:
+                            routes_seen.add(route_key)
+                            meta.routes.append({
+                                "method": method.lower(),
+                                "path": full_path,
+                                "handler": handler_name,
+                            })
 
     if has_router:
-        meta.endpoint_count = sum(
-            1 for n in ast.walk(tree)
-            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and any(
-                isinstance(d, ast.Call) and
-                isinstance(d.func, ast.Attribute) and
-                d.func.attr.lower() in _HTTP_METHODS
-                for d in n.decorator_list
-            )
-        )
+        meta.endpoint_count = len(meta.routes)
         meta.http_methods = sorted(set(meta.http_methods))
         return True, meta
 
     return False, None
 
 
-def _extract_decorator_info(dec: ast.Attribute | ast.Call) -> tuple[str, str]:
-    """Return (http_method, path_prefix) from a decorator AST node."""
-    method = ""
-    prefix = ""
+def _extract_decorator_info(dec: ast.Attribute | ast.Call | ast.Name) -> tuple[str, str]:
+    """Return (http_method, path_prefix) from a decorator AST node.
+
+    Also returns (path, handler_name) when passed a decorated function node via
+    the `method` field for path, and `prefix` for the handler name — callers
+    that care about full routes use _extract_endpoint_info instead.
+    """
+    if isinstance(dec, ast.Name):
+        # @shared_task, @lru_cache, @field_validator etc. — not HTTP
+        return "", ""
     if isinstance(dec, ast.Attribute):
         if dec.attr.lower() in _HTTP_METHODS:
-            method = dec.attr.lower()
-        return method, prefix
+            return dec.attr.lower(), ""
+        return "", ""
     if isinstance(dec, ast.Call):
         sub = dec.func
+        if isinstance(sub, ast.Name):
+            # @shared_task(bind=True), @field_validator("x"), etc. — not HTTP
+            return "", ""
         if isinstance(sub, ast.Attribute):
+            method = ""
+            path = ""
             if sub.attr.lower() in _HTTP_METHODS:
                 method = sub.attr.lower()
             if dec.args:
                 first = dec.args[0]
+                if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                    path = first.value
+            return method, path
+    return "", ""
 
 
 def _is_model_module(tree: ast.AST) -> tuple[bool, ModelMeta | None]:
@@ -391,6 +427,7 @@ def _info_to_dict(info: ModuleInfo) -> dict[str, Any]:
             "http_methods": info.route_meta.http_methods,
             "path_prefix": info.route_meta.path_prefix,
             "endpoint_count": info.route_meta.endpoint_count,
+            "routes": info.route_meta.routes,
         }
     if info.model_meta:
         d["model_meta"] = {

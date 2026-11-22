@@ -205,6 +205,7 @@ def test_route_modules_have_route_meta():
         assert "http_methods" in r["route_meta"]
         assert "endpoint_count" in r["route_meta"]
         assert "path_prefix" in r["route_meta"]
+        assert "routes" in r["route_meta"]
 
 
 def test_model_modules_have_model_meta():
@@ -257,6 +258,54 @@ def test_json_serializable():
 
 
 # ---------------------------------------------------------------------------
+# Regression tests for non-HTTP decorators (reviewer-requested)
+# ---------------------------------------------------------------------------
+
+def test_non_http_decorators_do_not_crash_scan():
+    """shared_task(bind=True) and field_validator must not crash scan_module."""
+    source = (
+        '"""Module with non-HTTP decorators."""\n'
+        'from celery import shared_task\n'
+        '\n'
+        '@shared_task(bind=True)\n'
+        'def my_task(self):\n'
+        '    pass\n'
+        '\n'
+        'from pydantic import field_validator\n'
+        '\n'
+        'class MyModel:\n'
+        '    @field_validator("x")\n'
+        '    def validate_x(cls, v):\n'
+        '        return v\n'
+    )
+
+
+def test_route_module_reports_endpoint_paths_and_handlers():
+    """app/api/orders.py must report per-endpoint paths and handler names."""
+    info = scan_module("app/api/orders.py")
+    assert info.category == "route"
+    assert info.route_meta is not None
+    assert len(info.route_meta.routes) > 0, \
+        "Expected at least one route in route_meta.routes"
+
+    # Check that routes contains expected entries
+    handlers = {r["handler"] for r in info.route_meta.routes}
+    assert "list_orders" in handlers
+    assert "create_order" in handlers
+    assert "get_order" in handlers
+
+    # Check full paths include the router prefix + endpoint path
+    paths = {r["path"] for r in info.route_meta.routes}
+    assert "/api/v1/orders" in paths
+    assert "/api/v1/orders/{order_id}" in paths
+
+    # Check methods
+    methods = {r["method"] for r in info.route_meta.routes}
+    assert "get" in methods
+    assert "post" in methods
+
+
+# ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
 
@@ -282,6 +331,8 @@ if __name__ == "__main__":
         test_scan_module_returns_module_info,
         test_scan_module_nonexistent_file,
         test_json_serializable,
+        test_non_http_decorators_do_not_crash_scan,
+        test_route_module_reports_endpoint_paths_and_handlers,
     ]
 
     passed = 0
