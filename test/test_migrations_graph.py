@@ -117,6 +117,8 @@ class TestBuildDag:
             assert G.number_of_edges() == 2
             assert G.has_edge("0001", "0002")
             assert G.has_edge("0002", "0003")
+            assert G.edges["0001", "0002"]["kind"] == "parent"
+            assert G.edges["0002", "0003"]["kind"] == "parent"
 
     def test_depends_on_extra_nodes(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -131,6 +133,9 @@ class TestBuildDag:
             assert G.has_edge("0001", "0002")
             assert "0001a" in G.nodes
             assert "0001b" in G.nodes
+            assert G.edges["0001", "0002"]["kind"] == "parent"
+            assert G.edges["0001a", "0002"]["kind"] == "depends_on"
+            assert G.edges["0001b", "0002"]["kind"] == "depends_on"
 
     def test_label_includes_first_docstring_line(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -177,9 +182,8 @@ class TestComputeRollbackPath:
             G = build_dag(migrations)
             path = compute_rollback_path(G, "0001")
             assert path is not None
-            assert path[0] == "0003"
-            assert path[-1] == "0001"
-            assert len(path) == 3
+            # path[1:] excludes the head (0003); steps are [0002, 0001]
+            assert path == ["0002", "0001"]
 
     def test_rollback_to_intermediate(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -190,9 +194,8 @@ class TestComputeRollbackPath:
             G = build_dag(migrations)
             path = compute_rollback_path(G, "0002")
             assert path is not None
-            assert path[0] == "0003"
-            assert path[-1] == "0002"
-            assert len(path) == 2
+            # path[1:] excludes the head (0003); step is [0002]
+            assert path == ["0002"]
 
     def test_rollback_unreachable(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -226,3 +229,13 @@ class TestGraphToJson:
             assert len(data["edges"]) == 1
             assert data["heads"] == ["0002"]
             assert data["roots"] == ["0001"]
+            # Check node shapes
+            for node in data["nodes"]:
+                assert "is_head" in node
+                assert "id" in node
+                assert "label" in node
+            # Check edge shapes
+            for edge in data["edges"]:
+                assert "from" in edge
+                assert "to" in edge
+                assert "kind" in edge

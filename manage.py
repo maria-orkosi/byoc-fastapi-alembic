@@ -15,6 +15,7 @@ from app.migrations_graph import (
     render_graph_svg,
     find_heads,
     find_roots,
+    graph_to_json,
 )
 
 
@@ -53,77 +54,28 @@ def cmd_migrations_graph(args):
 
 
 def _write_html_graph(G, html_path):
-    """Write an interactive HTML graph using Plotly."""
+    """Write an interactive HTML graph by reading the shared template from
+    ``app/static/migrations-graph.html`` and embedding the graph data."""
     import json
-    from app.migrations_graph import graph_to_json
 
     graph_data = graph_to_json(G)
-    nodes_json = json.dumps(graph_data["nodes"])
-    edges_json = json.dumps(graph_data["edges"])
+    data_json = json.dumps(graph_data)
 
-    html = """<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Migrations Graph - Byoc FastAPI Alembic r5c</title>
-  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-  <style>
-    body { margin: 0; padding: 20px; background: #111; color: #e0e0e0; font-family: "Inter", sans-serif; }
-    h1 { text-align: center; }
-    #graph { width: 100%; height: 80vh; }
-  </style>
-</head>
-<body>
-  <h1>Migrations Dependency Graph</h1>
-  <div id="graph"></div>
-  <script>
-    var nodes = NODES_PLACEHOLDER;
-    var edges = EDGES_PLACEHOLDER;
+    template_dir = os.path.join(os.path.dirname(__file__), "app", "static")
+    template_path = os.path.join(template_dir, "migrations-graph.html")
 
-    var edgeTraces = edges.map(function(e) {
-      var src = nodes.findIndex(function(n) { return n.id === e.from; });
-      var tgt = nodes.findIndex(function(n) { return n.id === e.to; });
-      return {
-        x: [src, tgt],
-        y: [0, 0],
-        mode: 'lines',
-        line: { color: '#888', width: 2 },
-        hoverinfo: 'none',
-        showlegend: false
-      };
-    });
+    if not os.path.isfile(template_path):
+        print(f"Warning: template not found at {template_path}, skipping HTML output.")
+        return
 
-    var nodeTrace = {
-      x: nodes.map(function(_, i) { return i; }),
-      y: nodes.map(function() { return 0; }),
-      text: nodes.map(function(n) { return n.label; }),
-      mode: 'markers+text',
-      textposition: 'bottom center',
-      marker: { size: 20, color: '#4A90D9' },
-      textfont: { color: '#fff' },
-      hoverinfo: 'text',
-      type: 'scatter',
-      showlegend: false
-    };
+    with open(template_path, "r", encoding="utf-8") as fh:
+        template = fh.read()
 
-    var layout = {
-      title: 'Alembic Migration Chain',
-      paper_bgcolor: '#111',
-      plot_bgcolor: '#111',
-      font: { color: '#e0e0e0' },
-      xaxis: { showgrid: false, zeroline: false, showticklabels: false },
-      yaxis: { showgrid: false, zeroline: false, showticklabels: false },
-      margin: { l: 40, r: 40, t: 60, b: 80 }
-    };
-
-    Plotly.newPlot('graph', edgeTraces.concat([nodeTrace]), layout);
-  </script>
-</body>
-</html>"""
-
-    html = html.replace("NODES_PLACEHOLDER", nodes_json)
-    html = html.replace("EDGES_PLACEHOLDER", edges_json)
+    # Embed the full graph JSON so the page can render without an API call
+    html = template.replace(
+        "/* GRAPH_DATA_PLACEHOLDER */",
+        f"var EMBEDDED_GRAPH_DATA = {data_json};",
+    )
 
     with open(html_path, "w", encoding="utf-8") as fh:
         fh.write(html)
@@ -145,12 +97,16 @@ def cmd_migrations_rollback(args):
         print(f"Current heads: {find_heads(G)}")
         return
 
+    if not path:
+        print(f"Already at revision '{target}' — nothing to downgrade.")
+        return
+
     print(f"Rollback path from head(s) to revision '{target}':")
-    print(f"  Downgrade sequence (run in order):")
+    print(f"  Run these commands in order:")
     for step in path:
         print(f"    alembic downgrade {step}")
 
-    if len(path) > 1:
+    if len(path) >= 1:
         print()
         print(f"Or run a single command:")
         print(f"    alembic downgrade {target}")

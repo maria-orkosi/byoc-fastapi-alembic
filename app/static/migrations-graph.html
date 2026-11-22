@@ -106,8 +106,14 @@
   <div id="rollback-result"></div>
 
   <script>
+    /* GRAPH_DATA_PLACEHOLDER */
     var GRAPH_API = '/migrations/graph';
     var ROLLBACK_API = '/migrations/rollback/';
+
+    /* -- CSS variable helpers -- */
+    function cssVar(name) {
+      return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    }
 
     function showError(msg) {
       var el = document.getElementById('rollback-result');
@@ -115,77 +121,172 @@
       el.innerHTML = '<p class="error">' + msg + '</p>';
     }
 
+    /**
+     * Compute a layered layout: x = topological generation, y = branch lane.
+     */
+    function computeLayout(data) {
+      var nodes = data.nodes;
+      var edges = data.edges;
+      var children = {};
+      var parents = {};
+      nodes.forEach(function(n) { children[n.id] = []; parents[n.id] = []; });
+      edges.forEach(function(e) {
+        if (children[e.from]) children[e.from].push(e.to);
+        if (parents[e.to]) parents[e.to].push(e.from);
+      });
+      var generation = {};
+      var inDegree = {};
+      nodes.forEach(function(n) { inDegree[n.id] = (parents[n.id] || []).length; });
+      var queue = [];
+      nodes.forEach(function(n) {
+        if (inDegree[n.id] === 0) { queue.push(n.id); generation[n.id] = 0; }
+      });
+      var maxGen = 0;
+      while (queue.length) {
+        var cur = queue.shift();
+        (children[cur] || []).forEach(function(child) {
+          generation[child] = Math.max(generation[child] || 0, (generation[cur] || 0) + 1);
+          maxGen = Math.max(maxGen, generation[child]);
+          inDegree[child]--;
+          if (inDegree[child] === 0) queue.push(child);
+        });
+      }
+      // Assign lanes (y) — spread nodes at same generation vertically
+      var nodesByGen = {};
+      nodes.forEach(function(n) {
+        var g = generation[n.id] !== undefined ? generation[n.id] : 0;
+        if (!nodesByGen[g]) nodesByGen[g] = [];
+        nodesByGen[g].push(n.id);
+      });
+      var lane = {};
+      for (var g = 0; g <= maxGen; g++) {
+        var ids = nodesByGen[g] || [];
+        ids.forEach(function(id, i) {
+          lane[id] = (i - (ids.length - 1) / 2) * 1.5;
+        });
+      }
+      return { generation: generation, lane: lane, maxGen: maxGen };
+    }
+
     function renderGraph(data) {
       var nodes = data.nodes;
       var edges = data.edges;
+      var heads = data.heads || [];
+      var headsSet = {};
+      heads.forEach(function(h) { headsSet[h] = true; });
 
-      // Build adjacency for layered layout (simple topological)
-      var nodeIndex = {};
-      nodes.forEach(function(n, i) { nodeIndex[n.id] = i; });
+      var lay = computeLayout(data);
+      var gen = lay.generation;
+      var lane = lay.lane;
 
-      // Simple horizontal chain layout
-      var xs = nodes.map(function(_, i) { return i; });
-      var ys = nodes.map(function() { return 0; });
-
-      var edgeTraces = edges.map(function(e) {
-        var src = nodeIndex[e.from];
-        var tgt = nodeIndex[e.to];
-        return {
-          x: [src, tgt],
-          y: [0, 0],
-          mode: 'lines',
-          line: { color: getComputedStyle(document.documentElement).getPropertyValue('--brand-accent').trim() || '#58a6ff', width: 2 },
-          hoverinfo: 'none',
-          showlegend: false
-        };
+      // Separate edges by kind
+      var parentEdges = [];
+      var dependsOnEdges = [];
+      edges.forEach(function(e) {
+        if (e.kind === 'depends_on') { dependsOnEdges.push(e); }
+        else { parentEdges.push(e); }
       });
 
-      var nodeTrace = {
-        x: xs,
-        y: ys,
-        text: nodes.map(function(n) { return n.label; }),
-        textposition: 'bottom center',
-        mode: 'markers+text',
-        marker: {
-          size: 24,
-          color: getComputedStyle(document.documentElement).getPropertyValue('--brand-accent-node').trim() || '#4A90D9',
-          line: { color: getComputedStyle(document.documentElement).getPropertyValue('--brand-accent').trim() || '#58a6ff', width: 2 }
-        },
-        textfont: { color: getComputedStyle(document.documentElement).getPropertyValue('--brand-text-primary').trim() || '#c9d1d9', size: 10 },
-        hovertext: nodes.map(function(n) {
-          return '<b>Revision:</b> ' + n.id + '<br><b>Message:</b> ' + (n.docstring || 'N/A');
-        }),
-        hoverinfo: 'text',
-        type: 'scatter',
-        showlegend: false
-      };
+      function makeEdgeTraces(edgeList, isDashed) {
+        return edgeList.map(function(e) {
+          return {
+            x: [gen[e.from] || 0, gen[e.to] || 0],
+            y: [lane[e.from] || 0, lane[e.to] || 0],
+            mode: 'lines',
+            line: {
+              color: isDashed ? cssVar('--brand-accent') : cssVar('--brand-text-secondary'),
+              width: isDashed ? 1.5 : 2,
+              dash: isDashed ? 'dash' : 'solid'
+            },
+            hoverinfo: 'text',
+            hovertext: (e.kind || 'parent') + ': ' + e.from + ' → ' + e.to,
+            showlegend: false
+          };
+        });
+      }
 
-      var layout = {
+      var allEdgeTraces = makeEdgeTraces(parentEdges, false)
+        .concat(makeEdgeTraces(dependsOnEdges, true));
+
+      var regularNodes = nodes.filter(function(n) { return !headsSet[n.id]; });
+      var headNodes = nodes.filter(function(n) { return headsSet[n.id]; });
+
+      function makeNodeTrace(nodeList, isHead) {
+        return {
+          x: nodeList.map(function(n) { return gen[n.id] || 0; }),
+          y: nodeList.map(function(n) { return lane[n.id] || 0; }),
+          text: nodeList.map(function(n) { return n.label; }),
+          textposition: 'bottom center',
+          mode: 'markers+text',
+          marker: {
+            size: isHead ? 28 : 22,
+            color: isHead ? cssVar('--brand-accent-node') : cssVar('--brand-surface'),
+            line: {
+              color: isHead ? cssVar('--brand-accent') : cssVar('--brand-border'),
+              width: isHead ? 3 : 1.5
+            },
+            symbol: isHead ? 'diamond' : 'circle'
+          },
+          textfont: { color: cssVar('--brand-text-primary'), size: 10 },
+          hovertext: nodeList.map(function(n) {
+            return '<b>Revision:</b> ' + n.id +
+                   '<br><b>Message:</b> ' + (n.docstring || 'N/A') +
+                   (isHead ? '<br><b>⚡ HEAD</b>' : '');
+          }),
+          hoverinfo: 'text',
+          type: 'scatter',
+          name: isHead ? 'Heads' : 'Migrations',
+          showlegend: true
+        };
+      }
+
+      var nodeTraces = [];
+      if (regularNodes.length) nodeTraces.push(makeNodeTrace(regularNodes, false));
+      if (headNodes.length) nodeTraces.push(makeNodeTrace(headNodes, true));
+
+      // Legend entry for depends_on edges
+      if (dependsOnEdges.length) {
+        allEdgeTraces.push({
+          x: [null], y: [null], mode: 'lines',
+          line: { color: cssVar('--brand-accent'), width: 1.5, dash: 'dash' },
+          name: 'depends_on', showlegend: true
+        });
+      }
+
+      var plotLayout = {
         title: {
-          text: 'Migration Chain (Heads: ' + (data.heads || []).join(', ') + ')',
-          font: { color: getComputedStyle(document.documentElement).getPropertyValue('--brand-text-primary').trim() || '#c9d1d9' }
+          text: 'Migration Chain (Heads: ' + heads.join(', ') + ')',
+          font: { color: cssVar('--brand-text-primary') }
         },
-        paper_bgcolor: getComputedStyle(document.documentElement).getPropertyValue('--brand-bg').trim() || '#0d1117',
-        plot_bgcolor: getComputedStyle(document.documentElement).getPropertyValue('--brand-bg').trim() || '#0d1117',
-        font: { color: getComputedStyle(document.documentElement).getPropertyValue('--brand-text-primary').trim() || '#c9d1d9' },
-        xaxis: { showgrid: false, zeroline: false, showticklabels: false },
+        paper_bgcolor: cssVar('--brand-bg'),
+        plot_bgcolor: cssVar('--brand-bg'),
+        font: { color: cssVar('--brand-text-primary') },
+        xaxis: {
+          showgrid: false, zeroline: false, showticklabels: false,
+          title: { text: 'generation →', font: { color: cssVar('--brand-text-secondary'), size: 10 } }
+        },
         yaxis: { showgrid: false, zeroline: false, showticklabels: false },
         margin: { l: 40, r: 40, t: 60, b: 100 },
-        hovermode: 'closest'
+        hovermode: 'closest',
+        legend: {
+          font: { color: cssVar('--brand-text-primary') },
+          bgcolor: cssVar('--brand-surface-raised'),
+          bordercolor: cssVar('--brand-border')
+        }
       };
 
-      Plotly.newPlot('graph', edgeTraces.concat([nodeTrace]), layout, { responsive: true });
+      Plotly.newPlot('graph', allEdgeTraces.concat(nodeTraces), plotLayout, { responsive: true });
     }
 
     function loadGraph() {
+      if (typeof EMBEDDED_GRAPH_DATA !== 'undefined') {
+        renderGraph(EMBEDDED_GRAPH_DATA);
+        return;
+      }
       fetch(GRAPH_API)
         .then(function(r) { return r.json(); })
-        .then(function(data) {
-          renderGraph(data);
-        })
-        .catch(function(err) {
-          showError('Failed to load graph: ' + err.message);
-        });
+        .then(function(data) { renderGraph(data); })
+        .catch(function(err) { showError('Failed to load graph: ' + err.message); });
     }
 
     function computeRollback() {
@@ -204,12 +305,12 @@
         })
         .then(function(data) {
           resultEl.style.display = 'block';
-          var steps = data.downgrade_steps.map(function(s) { return s; }).join(' → ');
-          var cmds = data.commands.join('\n');
+          var steps = (data.downgrade_steps || []).join(' → ');
+          var cmds = (data.commands || []).join('\n');
           resultEl.innerHTML =
             '<h3>Rollback to ' + target + '</h3>' +
-            '<p>Sequence: <strong>' + steps + '</strong></p>' +
-            '<pre>' + cmds + '</pre>';
+            '<p>Sequence: <strong>' + (steps || '(already at target)') + '</strong></p>' +
+            '<pre>' + (cmds || '(no steps needed)') + '</pre>';
         })
         .catch(function(err) {
           showError(err.message);

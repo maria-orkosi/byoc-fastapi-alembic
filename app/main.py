@@ -8,18 +8,9 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import create_engine, text
 
-from app.migrations_graph import (
-    parse_migrations,
-    build_dag,
-    compute_rollback_path,
-    render_graph_png,
-    render_graph_svg,
-    graph_to_json,
-    find_heads,
-)
-
 DATABASE_URL = os.environ["DATABASE_URL"]
 SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY")
+# pool_pre_ping=True ensures stale connections are recycled before use
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 app = FastAPI(title="Orders")
 
@@ -49,6 +40,8 @@ def orders():
 @app.get("/migrations/graph", response_class=JSONResponse)
 def migrations_graph_json():
     """Return the migration graph as JSON for frontend consumption."""
+    from app.migrations_graph import parse_migrations, build_dag, graph_to_json
+
     migrations = parse_migrations()
     G = build_dag(migrations)
     return graph_to_json(G)
@@ -57,6 +50,8 @@ def migrations_graph_json():
 @app.get("/migrations/graph.png", response_class=FileResponse)
 def migrations_graph_png():
     """Return the migration graph as a PNG image."""
+    from app.migrations_graph import parse_migrations, build_dag, render_graph_png
+
     migrations = parse_migrations()
     G = build_dag(migrations)
     output_path = os.path.join(static_dir, "migrations_graph.png")
@@ -70,6 +65,8 @@ def migrations_graph_png():
 @app.get("/migrations/graph.svg", response_class=FileResponse)
 def migrations_graph_svg():
     """Return the migration graph as an SVG image."""
+    from app.migrations_graph import parse_migrations, build_dag, render_graph_svg
+
     migrations = parse_migrations()
     G = build_dag(migrations)
     output_path = os.path.join(static_dir, "migrations_graph.svg")
@@ -93,6 +90,13 @@ def migrations_graph_html():
 @app.get("/migrations/rollback/{target_revision}", response_class=JSONResponse)
 def migrations_rollback(target_revision: str):
     """Compute the rollback path from current heads to a target revision."""
+    from app.migrations_graph import (
+        parse_migrations,
+        build_dag,
+        compute_rollback_path,
+        find_heads,
+    )
+
     migrations = parse_migrations()
     G = build_dag(migrations)
     path = compute_rollback_path(G, target_revision)
@@ -107,5 +111,5 @@ def migrations_rollback(target_revision: str):
     return {
         "target_revision": target_revision,
         "downgrade_steps": path,
-        "commands": [f"alembic downgrade {step}" for step in path],
+        "commands": [f"alembic downgrade {step}" for step in path] if path else [],
     }
