@@ -4,6 +4,8 @@ DATABASE_URL as a database reference and SENDGRID_API_KEY as a required secret."
 import os
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import create_engine, text
 
 from app.scanner import scan_all
@@ -32,4 +34,90 @@ def orders():
 def scan_modules():
     """Scan and categorise every Python module under app/."""
     return scan_all("app")
+
+
+# ---------------------------------------------------------------------------
+# Migration graph endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/migrations-graph")
+def migrations_graph_viewer():
+    """Serve the interactive migration graph HTML page with injected data."""
+    import json
+    from app.migrations_graph import (
+        parse_all_migrations,
+        build_dag,
+        find_heads,
+    )
+    migrations = parse_all_migrations()
+    if not migrations:
+        html_path = os.path.join(os.path.dirname(__file__), "static", "migrations-graph.html")
+        if os.path.exists(html_path):
+            with open(html_path) as f:
+                template = f.read()
+        else:
+            template = "<html><body><h1>No migrations found.</h1></body></html>"
+        return HTMLResponse(template.replace("%MIGRATION_DATA%", json.dumps({"nodes": [], "edges": [], "heads": []})))
+
+    G = build_dag(migrations)
+    heads = find_heads(G)
+
+    nodes_data = []
+    for m in migrations:
+        nodes_data.append({"id": m.revision, "docstring": m.docstring})
+
+    edges_data = []
+    for u, v, d in G.edges(data=True):
+        edges_data.append({"source": u, "target": v, "kind": d.get("kind", "parent")})
+
+    data = {
+        "nodes": nodes_data,
+        "edges": edges_data,
+        "heads": heads,
+    }
+
+    html_path = os.path.join(os.path.dirname(__file__), "static", "migrations-graph.html")
+    if os.path.exists(html_path):
+        with open(html_path) as f:
+            template = f.read()
+    else:
+        template = "<html><body><h1>Migration Graph</h1><pre>%MIGRATION_DATA%</pre></body></html>"
+
+    return HTMLResponse(template.replace("%MIGRATION_DATA%", json.dumps(data)))
+
+
+@app.get("/api/migrations-graph")
+def migrations_graph_api():
+    """Return migration graph data as JSON."""
+    from app.migrations_graph import (
+        parse_all_migrations,
+        build_dag,
+        find_heads,
+    )
+    migrations = parse_all_migrations()
+    if not migrations:
+        return JSONResponse({"nodes": [], "edges": [], "heads": []})
+
+    G = build_dag(migrations)
+    heads = find_heads(G)
+
+    nodes_data = []
+    for m in migrations:
+        nodes_data.append({"id": m.revision, "docstring": m.docstring})
+
+    edges_data = []
+    for u, v, d in G.edges(data=True):
+        edges_data.append({"source": u, "target": v, "kind": d.get("kind", "parent")})
+
+    return JSONResponse({
+        "nodes": nodes_data,
+        "edges": edges_data,
+        "heads": heads,
+    })
+
+
+# Mount static files last
+_static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.isdir(_static_dir):
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 

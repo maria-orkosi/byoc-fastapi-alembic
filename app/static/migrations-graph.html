@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Alembic Migration Graph</title>
+<style>
+  :root {
+    --color-bg: #1a1a2e;
+    --color-surface: #16213e;
+    --color-text: #e0e0e0;
+    --color-accent: #4a9eff;
+    --color-success: #2ecc71;
+    --color-warning: #ff8c42;
+    --color-error: #e74c3c;
+    --font-family: Inter, system-ui, -apple-system, sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: var(--font-family);
+    background: var(--color-bg);
+    color: var(--color-text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    background: var(--color-surface);
+    padding: 1rem 2rem;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  header h1 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--color-text);
+  }
+  header .subtitle {
+    font-size: 0.875rem;
+    color: rgba(224,224,224,0.6);
+    margin-top: 0.25rem;
+  }
+  main { flex: 1; padding: 1rem; }
+  #graph-container {
+    width: 100%;
+    height: calc(100vh - 100px);
+    background: var(--color-bg);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .legend {
+    display: flex; gap: 1.5rem; padding: 0.75rem 1rem;
+    font-size: 0.8rem; color: rgba(224,224,224,0.7);
+    justify-content: flex-end;
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+  .legend-swatch { width: 20px; height: 3px; border-radius: 2px; }
+  .legend-swatch.solid { background: var(--color-accent); }
+  .legend-swatch.dashed {
+    background: repeating-linear-gradient(90deg, var(--color-warning) 0 4px, transparent 4px 8px);
+  }
+  footer {
+    text-align: center; padding: 0.75rem;
+    font-size: 0.75rem; color: rgba(224,224,224,0.4);
+    background: var(--color-surface);
+    border-top: 1px solid rgba(255,255,255,0.08);
+  }
+</style>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+</head>
+<body>
+<header>
+  <h1>Alembic Migration Graph</h1>
+  <div class="subtitle">Interactive visualisation of database migration dependencies</div>
+</header>
+<main>
+  <div class="legend">
+    <div class="legend-item"><span class="legend-swatch solid"></span> Parent edge</div>
+    <div class="legend-item"><span class="legend-swatch dashed"></span> depends_on edge</div>
+  </div>
+  <div id="graph-container"></div>
+</main>
+<footer>Byoc FastAPI Alembic &mdash; Migration Graph Viewer</footer>
+
+<script>
+  function cssVar(name, fallback) {
+    var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || (fallback || '');
+  }
+
+  var MIGRATION_DATA = %MIGRATION_DATA%;
+
+  (function() {
+    if (!MIGRATION_DATA || !MIGRATION_DATA.nodes || MIGRATION_DATA.nodes.length === 0) {
+      document.getElementById('graph-container').innerHTML =
+        '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--color-text);opacity:0.5">No migrations found.</div>';
+      return;
+    }
+
+    var nodes = MIGRATION_DATA.nodes;
+    var edges = MIGRATION_DATA.edges;
+    var heads = MIGRATION_DATA.heads || [];
+    var nodeMap = {};
+    var headSet = {};
+    nodes.forEach(function(n) { nodeMap[n.id] = n; });
+    heads.forEach(function(h) { headSet[h] = true; });
+
+    var layers = {};
+    var roots = [];
+    nodes.forEach(function(n) { n._incoming = 0; });
+    edges.forEach(function(e) {
+      if (e.kind === 'parent') {
+        var child = nodeMap[e.target];
+        if (child) child._incoming++;
+      }
+    });
+    nodes.forEach(function(n) {
+      if (n._incoming === 0) roots.push(n.id);
+    });
+
+    var queue = roots.slice();
+    roots.forEach(function(r) { layers[r] = 0; });
+    while (queue.length) {
+      var cur = queue.shift();
+      edges.forEach(function(e) {
+        if (e.source === cur && e.kind === 'parent') {
+          var nl = (layers[cur] || 0) + 1;
+          if (layers[e.target] === undefined || layers[e.target] < nl) {
+            layers[e.target] = nl;
+            queue.push(e.target);
+          }
+        }
+      });
+    }
+
+    var pos = {};
+    var layerGroups = {};
+    Object.keys(layers).forEach(function(id) {
+      var l = layers[id];
+      if (!layerGroups[l]) layerGroups[l] = [];
+      layerGroups[l].push(id);
+    });
+    nodes.forEach(function(n) {
+      if (layers[n.id] === undefined) {
+        layers[n.id] = 0;
+        if (!layerGroups[0]) layerGroups[0] = [];
+        layerGroups[0].push(n.id);
+      }
+    });
+    Object.keys(layerGroups).forEach(function(l) {
+      var ids = layerGroups[l].sort();
+      ids.forEach(function(id, i) {
+        pos[id] = {x: (i + 1) / (ids.length + 1) * 10, y: -parseInt(l) * 3};
+      });
+    });
+
+    var parentEdgeX = [], parentEdgeY = [];
+    var depEdgeX = [], depEdgeY = [];
+    edges.forEach(function(e) {
+      if (!pos[e.source] || !pos[e.target]) return;
+      if (e.kind === 'parent') {
+        parentEdgeX.push(pos[e.source].x, pos[e.target].x, null);
+        parentEdgeY.push(pos[e.source].y, pos[e.target].y, null);
+      } else {
+        depEdgeX.push(pos[e.source].x, pos[e.target].x, null);
+        depEdgeY.push(pos[e.source].y, pos[e.target].y, null);
+      }
+    });
+
+    var nodeX = [], nodeY = [], nodeText = [], nodeColors = [];
+    nodes.forEach(function(n) {
+      if (!pos[n.id]) return;
+      nodeX.push(pos[n.id].x);
+      nodeY.push(pos[n.id].y);
+      var label = '<b>' + n.id.substring(0, 4) + '</b>';
+      if (n.docstring) label += '<br>' + n.docstring.substring(0, 60);
+      nodeText.push(label);
+      var accent = cssVar('--color-accent', '#4a9eff');
+      var success = cssVar('--color-success', '#2ecc71');
+      nodeColors.push(headSet[n.id] ? success : accent);
+    });
+
+    var traces = [];
+    if (parentEdgeX.length > 0) {
+      traces.push({
+        x: parentEdgeX, y: parentEdgeY, mode: 'lines',
+        line: { color: cssVar('--color-accent', '#4a9eff'), width: 1.5 },
+        hoverinfo: 'none', name: 'parent', showlegend: true
+      });
+    }
+    if (depEdgeX.length > 0) {
+      traces.push({
+        x: depEdgeX, y: depEdgeY, mode: 'lines',
+        line: { color: cssVar('--color-warning', '#ff8c42'), width: 1.5, dash: 'dash' },
+        hoverinfo: 'none', name: 'depends_on', showlegend: true
+      });
+    }
+    traces.push({
+      x: nodeX, y: nodeY, mode: 'markers+text',
+      text: nodeText, textposition: 'middle center',
+      textfont: { size: 10, color: 'white' },
+      marker: { size: 30, color: nodeColors, line: { width: 2, color: 'white' } },
+      hoverinfo: 'text', name: 'nodes', showlegend: false
+    });
+
+    Plotly.newPlot('graph-container', traces, {
+      title: '', showlegend: true, hovermode: 'closest',
+      xaxis: { showgrid: false, zeroline: false, showticklabels: false },
+      yaxis: { showgrid: false, zeroline: false, showticklabels: false },
+      plot_bgcolor: cssVar('--color-bg', '#1a1a2e'),
+      paper_bgcolor: cssVar('--color-bg', '#1a1a2e'),
+      font: { color: cssVar('--color-text', '#e0e0e0') },
+      margin: { l: 20, r: 20, t: 20, b: 20 }
+    }, { responsive: true, displayModeBar: false });
+  })();
+</script>
+</body>
+</html>
+
