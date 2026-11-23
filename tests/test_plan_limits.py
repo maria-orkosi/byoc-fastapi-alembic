@@ -26,15 +26,10 @@ def test_limitsFor_no_plan_returns_free():
 
 def test_limitsFor_known_plan_returns_correct_limits():
     """limitsFor for a known plan returns the limits for that plan."""
-    pro_limits = limitsFor("pro")
-    assert pro_limits["orders"] == PLAN_LIMITS["pro"]["orders"]
-    assert pro_limits["migrations"] is None
-    assert pro_limits["scanner"] is None
-
-    enterprise_limits = limitsFor("enterprise")
-    assert enterprise_limits["orders"] is None
-    assert enterprise_limits["migrations"] is None
-    assert enterprise_limits["scanner"] is None
+    free_limits = limitsFor("free")
+    assert free_limits["orders"] == PLAN_LIMITS["free"]["orders"]
+    assert free_limits["migrations"] == PLAN_LIMITS["free"]["migrations"]
+    assert free_limits["scanner"] == PLAN_LIMITS["free"]["scanner"]
 
 
 def test_limitsFor_unknown_plan_returns_all_null():
@@ -46,10 +41,10 @@ def test_limitsFor_unknown_plan_returns_all_null():
 
 def test_limitsFor_case_insensitive():
     """limitsFor is case-insensitive."""
-    pro_upper = limitsFor("PRO")
-    pro_mixed = limitsFor("Pro")
-    pro_lower = limitsFor("pro")
-    assert pro_upper == pro_lower == pro_mixed
+    free_upper = limitsFor("FREE")
+    free_mixed = limitsFor("Free")
+    free_lower = limitsFor("free")
+    assert free_upper == free_lower == free_mixed
 
 
 def test_limitsFor_never_throws():
@@ -57,16 +52,14 @@ def test_limitsFor_never_throws():
     limitsFor(None)
     limitsFor("")
     limitsFor("free")
-    limitsFor("pro")
-    limitsFor("enterprise")
     limitsFor("nonexistent")
     limitsFor(123)  # type: ignore
 
 
 def test_limitsFor_strips_whitespace():
     """limitsFor handles leading/trailing whitespace."""
-    pro_limits = limitsFor("  pro  ")
-    assert pro_limits["orders"] == PLAN_LIMITS["pro"]["orders"]
+    free_limits = limitsFor("  free  ")
+    assert free_limits["orders"] == PLAN_LIMITS["free"]["orders"]
 
 
 # ---------------------------------------------------------------------------

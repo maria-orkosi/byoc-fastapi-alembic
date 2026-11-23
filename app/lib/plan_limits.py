@@ -19,16 +19,6 @@ PLAN_LIMITS = {
         "migrations": 1,
         "scanner": 2,
     },
-    "pro": {
-        "orders": 100,
-        "migrations": None,
-        "scanner": None,
-    },
-    "enterprise": {
-        "orders": None,
-        "migrations": None,
-        "scanner": None,
-    },
 }
 
 

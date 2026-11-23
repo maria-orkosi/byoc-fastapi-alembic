@@ -30,15 +30,24 @@ def _check_order_limit(request: Request):
 
     order_limit = limits.get("orders")
     if order_limit is not None:
-        # Count existing orders
+        # Count orders owned by the current user
         try:
+            user_id = getattr(request.state, "user_id", None)
             from app.main import engine
             from sqlalchemy import text
             with engine.connect() as conn:
-                row = conn.execute(text("select count(*) as cnt from orders")).first()
+                if user_id is not None:
+                    row = conn.execute(
+                        text("select count(*) as cnt from orders where user_id = :uid"),
+                        {"uid": user_id},
+                    ).first()
+                else:
+                    # No user context — count all orders, same as before
+                    row = conn.execute(text("select count(*) as cnt from orders")).first()
                 current_count = int(row.cnt) if row else 0
         except Exception:
-            current_count = 0
+            # On DB error, assume the limit is reached rather than bypassing it
+            current_count = order_limit
 
         if current_count >= order_limit:
             feature_label = next((f["label"] for f in FEATURES if f["key"] == "orders"), "Orders")

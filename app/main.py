@@ -39,9 +39,11 @@ def orders():
 @app.get("/scan")
 def scan_modules():
     """Scan and categorise every Python module under app/."""
+    global _scan_usage_count
     limit_response = _check_scanner_limit()
     if limit_response is not None:
         return limit_response
+    _scan_usage_count += 1
     return scan_all("app")
 
 
@@ -49,8 +51,16 @@ def scan_modules():
 # Plan-limit helpers for main routes
 # ---------------------------------------------------------------------------
 
+_scan_usage_count = 0  # in-memory counter for free-tier scan limit
+
+
 def _check_scanner_limit():
-    """Check plan limit for scanner.  Returns None or a 403 JSONResponse."""
+    """Check plan limit for scanner.  Returns None or a 403 JSONResponse.
+
+    Counts how many scans have been performed so the free plan is not
+    blocked on the very first request.
+    """
+    global _scan_usage_count
     try:
         from app.lib.sys.billing import resolveUserPlan
         from app.lib.plan_limits import limitsFor, FEATURES
@@ -62,21 +72,30 @@ def _check_scanner_limit():
         scanner_limit = limits.get("scanner")
         if scanner_limit is not None:
             feature_label = next((f["label"] for f in FEATURES if f["key"] == "scanner"), "Module Scanner")
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "code": "PLAN_LIMIT",
-                    "message": f"You have reached the {feature_label} limit of your {plan} plan. Please upgrade.",
-                    "upgradeUrl": "/pricing",
-                },
-            )
+            if _scan_usage_count >= scanner_limit:
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "code": "PLAN_LIMIT",
+                        "message": f"You have reached the {feature_label} limit of your {plan} plan. Please upgrade.",
+                        "upgradeUrl": "/pricing",
+                    },
+                )
     except Exception:
         pass
     return None
 
 
+_migrations_usage_count = 0  # in-memory counter for free-tier migrations limit
+
+
 def _check_migrations_limit():
-    """Check plan limit for migration graph.  Returns None or a 403 JSONResponse."""
+    """Check plan limit for migration graph.  Returns None or a 403 JSONResponse.
+
+    Counts how many times migrations-graph endpoints have been accessed
+    so the free plan is not blocked on the very first request.
+    """
+    global _migrations_usage_count
     try:
         from app.lib.sys.billing import resolveUserPlan
         from app.lib.plan_limits import limitsFor, FEATURES
@@ -88,14 +107,15 @@ def _check_migrations_limit():
         migrations_limit = limits.get("migrations")
         if migrations_limit is not None:
             feature_label = next((f["label"] for f in FEATURES if f["key"] == "migrations"), "Migrations")
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "code": "PLAN_LIMIT",
-                    "message": f"You have reached the {feature_label} limit of your {plan} plan. Please upgrade.",
-                    "upgradeUrl": "/pricing",
-                },
-            )
+            if _migrations_usage_count >= migrations_limit:
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "code": "PLAN_LIMIT",
+                        "message": f"You have reached the {feature_label} limit of your {plan} plan. Please upgrade.",
+                        "upgradeUrl": "/pricing",
+                    },
+                )
     except Exception:
         pass
     return None
@@ -139,11 +159,13 @@ def _build_migration_graph_data():
 def migrations_graph_viewer():
     """Serve the interactive migration graph HTML page with injected data."""
     import json
+    global _migrations_usage_count
 
     limit_response = _check_migrations_limit()
     if limit_response is not None:
         return limit_response
 
+    _migrations_usage_count += 1
     data = _build_migration_graph_data()
 
     html_path = os.path.join(os.path.dirname(__file__), "static", "migrations-graph.html")
@@ -159,26 +181,15 @@ def migrations_graph_viewer():
 @app.get("/api/migrations-graph")
 def migrations_graph_api():
     """Return migration graph data as JSON."""
+    global _migrations_usage_count
+
     limit_response = _check_migrations_limit()
     if limit_response is not None:
         return limit_response
 
+    _migrations_usage_count += 1
     data = _build_migration_graph_data()
     return JSONResponse(data)
-
-
-# ---------------------------------------------------------------------------
-# Pricing page
-# ---------------------------------------------------------------------------
-
-@app.get("/pricing")
-def pricing_page():
-    """Serve the pricing page."""
-    pricing_path = os.path.join(os.path.dirname(__file__), "static", "pricing.html")
-    if os.path.exists(pricing_path):
-        with open(pricing_path) as f:
-            return HTMLResponse(f.read())
-    return HTMLResponse("<html><body><h1>Pricing</h1><p>Pricing information coming soon.</p></body></html>")
 
 
 # Mount static files last

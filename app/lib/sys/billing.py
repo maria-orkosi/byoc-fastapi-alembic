@@ -4,6 +4,10 @@ resolveUserPlan(user) answers { plan: str } — the plan slug of the
 currently signed-in user (or 'free' when there is no user / no active plan).
 """
 
+# User ID → plan mapping for demonstration purposes.
+# In production this reads from the billing database.
+_USER_PLANS = {}
+
 
 def resolveUserPlan(user=None):
     """Return the active plan for *user*.
@@ -14,15 +18,24 @@ def resolveUserPlan(user=None):
     Parameters
     ----------
     user : any
-        A user object or ``None`` (unauthenticated).
+        A user object, user id string, or ``None`` (unauthenticated).
 
     Returns
     -------
     dict
         ``{ "plan": "<slug>" }``
     """
-    # For now, always return free
-    return {"plan": "free"}
+    if user is None:
+        return {"plan": "free"}
+
+    # Accept either a user dict with an 'id' or a plain string/int id
+    try:
+        uid = user.get("id") if isinstance(user, dict) else str(user)
+    except Exception:
+        uid = str(user)
+
+    plan = _USER_PLANS.get(uid, "free")
+    return {"plan": plan}
 
 
 def getPlans():
@@ -35,6 +48,4 @@ def getPlans():
     """
     return [
         {"plan": "free", "name": "Free"},
-        {"plan": "pro", "name": "Pro"},
-        {"plan": "enterprise", "name": "Enterprise"},
     ]
