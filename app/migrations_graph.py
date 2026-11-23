@@ -523,6 +523,9 @@ def compute_rollback_path(
             return []
         current_head = heads[0]
 
+    if target_rev == current_head:
+        return [current_head]
+
     if target_rev not in G.nodes():
         raise ValueError(f"Target revision {target_rev!r} not found in the migration graph")
 
@@ -535,9 +538,14 @@ def compute_rollback_path(
     if current_head not in revG.nodes():
         raise ValueError(f"Current head {current_head!r} not in the reversed graph")
 
+    if target_rev not in revG.nodes():
+        raise ValueError(
+            f"Target revision {target_rev!r} is not reachable via parent edges"
+        )
+
     try:
         path = nx.shortest_path(revG, source=current_head, target=target_rev)
-    except nx.NetworkXNoPath:
+    except (nx.NetworkXNoPath, nx.NodeNotFound):
         raise ValueError(
             f"No downgrade path from head {current_head!r} to target {target_rev!r}"
         )

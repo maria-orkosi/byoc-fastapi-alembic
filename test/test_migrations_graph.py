@@ -382,6 +382,19 @@ def test_rollback_unreachable_target():
         pass
 
 
+def test_rollback_target_is_current_head():
+    """Rolling back to the head itself returns a single-element path."""
+    m1 = MigrationInfo(revision="0001", down_revision=None)
+    G = build_dag([m1])
+    mig_dict = {m.revision: m for m in [m1]}
+
+    path = compute_rollback_path(G, mig_dict, "0001", current_head="0001")
+    assert path == ["0001"]
+
+    cmds = format_downgrade_commands(path)
+    assert cmds == []
+
+
 def test_format_downgrade_commands():
     path = ["0003", "0002", "0001"]
     cmds = format_downgrade_commands(path)
@@ -542,6 +555,7 @@ if __name__ == "__main__":
         test_rollback_linear_chain,
         test_rollback_does_not_follow_depends_on,
         test_rollback_unreachable_target,
+        test_rollback_target_is_current_head,
         test_format_downgrade_commands,
         test_format_downgrade_commands_single,
         test_format_downgrade_commands_empty,

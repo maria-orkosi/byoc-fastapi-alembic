@@ -43,7 +43,6 @@ def scan_modules():
 
 def _build_migration_graph_data():
     """Parse migrations, build the DAG, and return serialisable graph data."""
-    import json
     from app.migrations_graph import (
         parse_all_migrations,
         build_dag,
@@ -85,7 +84,7 @@ def migrations_graph_viewer():
     else:
         template = "<html><body><h1>Migration Graph</h1><pre>%MIGRATION_DATA%</pre></body></html>"
 
-    return HTMLResponse(template.replace("%MIGRATION_DATA%", json.dumps(data)))
+    return HTMLResponse(template.replace("%MIGRATION_DATA%", json.dumps(data).replace("</", "<\\/")))
 
 
 @app.get("/api/migrations-graph")
