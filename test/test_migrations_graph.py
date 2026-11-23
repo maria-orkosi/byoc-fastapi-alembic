@@ -268,7 +268,7 @@ def test_parse_all_finds_migrations():
             'revision = "0001"\ndown_revision = None\n'
         )
         (Path(td) / "0002_add_users.py").write_text(
-            '"""add users\n\nrevision = "0002"\ndown_revision = "0001"\n"""\n'
+            '"""add users"""\nrevision = "0002"\ndown_revision = "0001"\n'
         )
         result = parse_all_migrations(td)
         assert len(result) == 2

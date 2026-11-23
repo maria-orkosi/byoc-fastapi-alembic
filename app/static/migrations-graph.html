@@ -58,6 +58,14 @@
   .legend-swatch.dashed {
     background: repeating-linear-gradient(90deg, var(--color-warning) 0 4px, transparent 4px 8px);
   }
+  .empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--color-text);
+    opacity: 0.5;
+  }
   footer {
     text-align: center; padding: 0.75rem;
     font-size: 0.75rem; color: rgba(224,224,224,0.4);
@@ -91,8 +99,11 @@
 
   (function() {
     if (!MIGRATION_DATA || !MIGRATION_DATA.nodes || MIGRATION_DATA.nodes.length === 0) {
-      document.getElementById('graph-container').innerHTML =
-        '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--color-text);opacity:0.5">No migrations found.</div>';
+      var container = document.getElementById('graph-container');
+      var empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.textContent = 'No migrations found.';
+      container.appendChild(empty);
       return;
     }
 

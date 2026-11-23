@@ -40,9 +40,9 @@ def scan_modules():
 # Migration graph endpoints
 # ---------------------------------------------------------------------------
 
-@app.get("/migrations-graph")
-def migrations_graph_viewer():
-    """Serve the interactive migration graph HTML page with injected data."""
+
+def _build_migration_graph_data():
+    """Parse migrations, build the DAG, and return serialisable graph data."""
     import json
     from app.migrations_graph import (
         parse_all_migrations,
@@ -51,13 +51,7 @@ def migrations_graph_viewer():
     )
     migrations = parse_all_migrations()
     if not migrations:
-        html_path = os.path.join(os.path.dirname(__file__), "static", "migrations-graph.html")
-        if os.path.exists(html_path):
-            with open(html_path) as f:
-                template = f.read()
-        else:
-            template = "<html><body><h1>No migrations found.</h1></body></html>"
-        return HTMLResponse(template.replace("%MIGRATION_DATA%", json.dumps({"nodes": [], "edges": [], "heads": []})))
+        return {"nodes": [], "edges": [], "heads": []}
 
     G = build_dag(migrations)
     heads = find_heads(G)
@@ -70,11 +64,19 @@ def migrations_graph_viewer():
     for u, v, d in G.edges(data=True):
         edges_data.append({"source": u, "target": v, "kind": d.get("kind", "parent")})
 
-    data = {
+    return {
         "nodes": nodes_data,
         "edges": edges_data,
         "heads": heads,
     }
+
+
+@app.get("/migrations-graph")
+def migrations_graph_viewer():
+    """Serve the interactive migration graph HTML page with injected data."""
+    import json
+
+    data = _build_migration_graph_data()
 
     html_path = os.path.join(os.path.dirname(__file__), "static", "migrations-graph.html")
     if os.path.exists(html_path):
@@ -89,31 +91,8 @@ def migrations_graph_viewer():
 @app.get("/api/migrations-graph")
 def migrations_graph_api():
     """Return migration graph data as JSON."""
-    from app.migrations_graph import (
-        parse_all_migrations,
-        build_dag,
-        find_heads,
-    )
-    migrations = parse_all_migrations()
-    if not migrations:
-        return JSONResponse({"nodes": [], "edges": [], "heads": []})
-
-    G = build_dag(migrations)
-    heads = find_heads(G)
-
-    nodes_data = []
-    for m in migrations:
-        nodes_data.append({"id": m.revision, "docstring": m.docstring})
-
-    edges_data = []
-    for u, v, d in G.edges(data=True):
-        edges_data.append({"source": u, "target": v, "kind": d.get("kind", "parent")})
-
-    return JSONResponse({
-        "nodes": nodes_data,
-        "edges": edges_data,
-        "heads": heads,
-    })
+    data = _build_migration_graph_data()
+    return JSONResponse(data)
 
 
 # Mount static files last

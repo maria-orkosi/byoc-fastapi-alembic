@@ -152,13 +152,9 @@ def parse_migration_file(filepath: str) -> MigrationInfo | None:
     docstring = ""
     if (isinstance(tree, ast.Module) and tree.body and
             isinstance(tree.body[0], ast.Expr) and
-            isinstance(tree.body[0].value, (ast.Constant, ast.Str))):
-        raw_doc = ""
-        val = tree.body[0].value
-        if isinstance(val, ast.Constant) and isinstance(val.value, str):
-            raw_doc = val.value
-        elif hasattr(val, 's'):
-            raw_doc = val.s
+            isinstance(tree.body[0].value, ast.Constant) and
+            isinstance(tree.body[0].value.value, str)):
+        raw_doc = tree.body[0].value.value
         first_line = raw_doc.strip().split("\n")[0].strip()
         if first_line and not first_line.startswith("Revision ID:"):
             docstring = first_line
@@ -489,8 +485,7 @@ def generate_html_graph(
 
     fig = go.Figure(data=data)
     fig.update_layout(
-        title="Alembic Migration Graph",
-        titlefont={"size": 16},
+        title={"text": "Alembic Migration Graph", "font": {"size": 16}},
         showlegend=True,
         hovermode="closest",
         xaxis={"showgrid": False, "zeroline": False, "showticklabels": False},
