@@ -8,6 +8,12 @@
   <style>
     :root {
       color-scheme: dark;
+      --color-accent: Highlight;
+      --color-text: CanvasText;
+      --color-bg: Canvas;
+      --color-text-secondary: GrayText;
+      --color-border: ButtonBorder;
+      --color-error: crimson;
     }
 
     body {
@@ -243,7 +249,7 @@
       if (dependsOnEdges.length) {
         allEdgeTraces.push({
           x: [null], y: [null], mode: 'lines',
-          line: { color: cssVar('--color-accent') || '#fa0', width: 1.5, dash: 'dash' },
+          line: { color: cssVar('--color-accent'), width: 1.5, dash: 'dash' },
           name: 'depends_on', showlegend: true
         });
       }
@@ -251,22 +257,22 @@
       var plotLayout = {
         title: {
           text: 'Migration Chain (Heads: ' + heads.join(', ') + ')',
-          font: { color: cssVar('--color-text') || '#ccc' }
+          font: { color: cssVar('--color-text') }
         },
-        paper_bgcolor: cssVar('--color-bg') || '#111',
-        plot_bgcolor: cssVar('--color-bg') || '#111',
-        font: { color: cssVar('--color-text') || '#ccc' },
+        paper_bgcolor: cssVar('--color-bg'),
+        plot_bgcolor: cssVar('--color-bg'),
+        font: { color: cssVar('--color-text') },
         xaxis: {
           showgrid: false, zeroline: false, showticklabels: false,
-          title: { text: 'generation ->', font: { color: cssVar('--color-text-secondary') || '#888', size: 10 } }
+          title: { text: 'generation ->', font: { color: cssVar('--color-text-secondary'), size: 10 } }
         },
         yaxis: { showgrid: false, zeroline: false, showticklabels: false },
         margin: { l: 40, r: 40, t: 60, b: 100 },
         hovermode: 'closest',
         legend: {
-          font: { color: cssVar('--color-text') || '#ccc' },
-          bgcolor: cssVar('--color-bg') || '#111',
-          bordercolor: cssVar('--color-border') || '#444'
+          font: { color: cssVar('--color-text') },
+          bgcolor: cssVar('--color-bg'),
+          bordercolor: cssVar('--color-border')
         }
       };
 
